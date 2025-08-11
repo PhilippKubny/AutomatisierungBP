@@ -626,4 +626,5 @@ if __name__ == "__main__":
 
 
 #TODO: Error website ->reload start from the element where it failed, exel empty rows to hold position, over 5 words, umlaute
-
+# python PlayHandelsregister.py -d --download-ad --excel "C:\Users\Nguyen-Bang\Downloads\TestBP.xlsx" --sheet "Tabelle1" --start 25 --end 30
+# python PlayHandelsregister.py -s "THYSSENKRUPP SCHULTE GMBH"  --register-number "26718" -d --download-ad
