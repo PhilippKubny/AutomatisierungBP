@@ -75,6 +75,11 @@ def read_jobs_from_excel(path: str, sheet: str | None, name_col: str, regno_col:
     for _, row in df_slice.iterrows():
         name = safe_get(row, name_col)
         if not name:
+            jobs.append({
+                "name": None,
+                "register_no": None,
+                "sap": None,
+            })
             continue  # skip rows without a company name
 
         register_no = safe_get(row, regno_col)

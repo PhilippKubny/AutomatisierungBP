@@ -8,6 +8,68 @@ import pdfplumber
 import pandas as pd
 
 # --- helpers ---------------------------------------------------------------
+def replace_umlauts(text):
+    """Replace German umlauts after uppercase conversion"""
+    replacements = {
+        'STR.': 'STRASSE',
+        'Ö': 'OE',
+        'Ä': 'AE',
+        'Ü': 'UE',
+        'ß': 'SS'
+    }
+    for umlaut, replacement in replacements.items():
+        text = text.replace(umlaut, replacement)
+    return text
+
+def split_german_address(addr: str) -> dict:
+    """
+    Zerlegt 'STRAßENNAME 12A, 12345 STADT' in {street, house_number, postal_code, city}.
+    (Adressformat wie im Handelsregisterauszug unter 'Geschäftsanschrift')
+    """
+
+    # 1) Links/Rechts um das erste Komma trennen
+    if "," in addr:
+        left, right = addr.split(",", 1)
+    else:
+        # Fallback: kein Komma → wir versuchen trotzdem zu trennen
+        left, right = addr, ""
+
+    left = left.strip()
+    right = right.strip()
+
+    # 2) Straße + Hausnummer: erste Ziffer in 'left' suchen
+    m = re.search(r"\d", left)
+    if m:
+        street = left[:m.start()].strip()
+        house = left[m.start():].strip()
+    else:
+        # keine Ziffer gefunden → alles als Straße, Rest leer
+        street, house = left, ""
+
+    # Hausnummer etwas normalisieren (z.B. "12 A" -> "12A"), aber nur wenn es passt
+    if re.fullmatch(r"\d+\s+[A-Za-z]", house):
+        house = house.replace(" ", "")
+
+    # 3) Rechts: PLZ + Stadt
+    # Primär: 5-stellige deutsche PLZ; Fallback erlaubt 4–5
+    m = re.match(r"\s*(\d{5})\s+(.+)", right)
+    if not m:
+        m = re.match(r"\s*(\d{4,5})\s+(.+)", right)
+
+    if m:
+        plz = m.group(1)
+        city = m.group(2).strip()
+    else:
+        # Fallback: keine klare PLZ gefunden
+        plz = ""
+        city = right
+
+    return {
+        "street": street,
+        "house_number": house,
+        "postal_code": plz,
+        "city": city,
+    }
 
 def normalize_text(s: str) -> str:
     """Normalize unicode & whitespace; fix common hyphenation at line breaks."""
@@ -20,10 +82,6 @@ def normalize_text(s: str) -> str:
     s = re.sub(r"[ \t]+", " ", s)
     return s
 
-REG_TOPRIGHT = re.compile(
-    r"Nummer\s+der\s+Firma:\s*([A-ZÄÖÜ]{2,4})\s*([0-9]{1,10})",
-    re.IGNORECASE
-)
 FIRMA_LINE = re.compile(
     r"\b2\.\s*a\)\s*Firma:\s*(.+)",  # capture only the first line after "Firma:"
     re.IGNORECASE
@@ -40,12 +98,16 @@ def extract_from_text(text: str) -> dict:
     """
     text = normalize_text(text)
 
-    # 1) Register type + number (top-right)
+    # 1) Register type + number (2nd line last 2 words)
     reg_type, reg_number = "", ""
-    m = REG_TOPRIGHT.search(text)
-    if m:
-        reg_type = m.group(1).upper()
-        reg_number = m.group(2)
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    line2 = lines[1]
+    print(f"Line 2: {line2}")  # Debugging output
+    words = line2.split()
+    w_type_raw, w_num_raw = words[-2], words[-1]
+    reg_type = re.sub(r"[^A-Za-zÄÖÜäöü]", "", w_type_raw).upper()
+    reg_number  = re.sub(r"[^\d]", "", w_num_raw)
+
 
     # 2) Company name (section 2.a) Firma:)
     company = ""
@@ -62,13 +124,14 @@ def extract_from_text(text: str) -> dict:
         address = m.group(1).strip()
         # Sometimes address line ends with a page artifact; trim trailing section markers
         address = re.sub(r"\s*(?:\n|$)", "", address)
-
+    addr = replace_umlauts(address.upper())
+    addr_parts = split_german_address(addr)
     return {
         "register_type": reg_type,       # e.g. HRB, HRA, VR, PR
         "register_number": reg_number,   # e.g. 12038
         "company_name": company,         # from 2.a) Firma:
-        "address": address,              # from 2.b) after Geschäftsanschrift:
-    }
+        "address": addr,              # from 2.b) after Geschäftsanschrift:
+    } | addr_parts  # merge address parts into the dict
 
 def extract_from_pdf(pdf_path: Path) -> dict:
     """
@@ -100,7 +163,7 @@ def scan_directory(in_dir: str, out_csv: str | None = None) -> pd.DataFrame:
     rows = []
     for p in sorted(in_dir.glob("*.pdf")):
         rows.append(extract_from_pdf(p))
-    df = pd.DataFrame(rows, columns=["file", "register_type", "register_number", "company_name", "address", "error"])
+    df = pd.DataFrame(rows, columns=["file", "register_type", "register_number", "company_name", "address", "error", "street", "house_number", "postal_code", "city"])
     if out_csv:
         Path(out_csv).parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(out_csv, index=False, encoding="utf-8")
@@ -125,3 +188,8 @@ if __name__ == "__main__":
         print(f"  Register: {r['register_type']} {r['register_number']}")
         print(f"  Company : {r['company_name']}")
         print(f"  Address : {r['address']}")
+        print(f"  Street  : {r['street']}")
+        print(f"  House # : {r['house_number']}")   
+        print(f"  Postal Code: {r['postal_code']}")
+        print(f"  City    : {r['city']}")
+
