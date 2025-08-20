@@ -114,6 +114,8 @@ def extract_from_text(text: str) -> dict:
     if m:
         # take this line; strip any trailing artifacts
         company = m.group(1).strip()
+    else:
+        return {"register_type": "unexpected Format"}
 
     # 3) Address (after "Geschäftsanschrift:")
     address = ""
@@ -123,6 +125,8 @@ def extract_from_text(text: str) -> dict:
         address = m.group(1).strip()
         # Sometimes address line ends with a page artifact; trim trailing section markers
         address = re.sub(r"\s*(?:\n|$)", "", address)
+    else:
+        return {"register_type": "unexpected Format"}
     addr = replace_umlauts(address.upper())
     addr_parts = split_german_address(addr)
     return {

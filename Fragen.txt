@@ -1,24 +1,8 @@
-Date not with . . . sondern mit ---
-File name type nicht wichtig? Wenn ja sollen wir nicht die begiffe benutzen die schon vorgegeben sind
+register type
 
-Muss jedes seinen eigenen folder haben oder geht auch alles in eins
 
-Wenn mehrere dann an den user in einem seperaten file
-wenn kein treffer auch an user
-Clickable mit word? Order vllt direct oeffnen im browser im code
-Mehrere Downloads wenn mehrere Firmen ?
-Oder postal code mit einbeziehen
+wie oft wiederholen bis abbrechen
 
-Schlawoerter max 5
-Wie speichern mit leerzeichen?
-Und pdf auch?
 
-60 mal die stude? Wie regeln  => 200 h
-Schon in script oder manuelle 1 mal die stude laufen lassen
-Timeout
+blatt sieht anders aus
 
-Line by line ?
-Kundennummer vs supplier nummer?
-
-Reopen website per aufruf?
-Async

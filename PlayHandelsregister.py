@@ -93,7 +93,7 @@ async def open_startpage(debug=False):
     if debug:
         print("[debug] opened welcome page:", page.url)
 
-async def perform_search(keyword: str, mode: str, register_number: str = None, debug=False):
+async def perform_search(keyword: str, mode: str, register_number: str = None, postal_code: str = None, postal_code_option=False, debug=False):
     """
     Click 'Advanced search', fill the form, submit.
     """
@@ -127,7 +127,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, d
         print("[warn] Rerun")
         page = await page.context.new_page()  # Reset page context
         await open_startpage(debug=debug)
-        await perform_search(keyword, mode, register_number=register_number, debug=debug)
+        await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option, debug=debug)
         return
 
     # Wait for the form to be present (use a field we know)
@@ -138,7 +138,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, d
         print("[warn] Rerun")
         page = await page.context.new_page()  # Reset page context
         await open_startpage(debug=debug)
-        await perform_search(keyword, mode, register_number=register_number, debug=debug)
+        await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option, debug=debug)
         return
 
     # Form fields (JSF IDs usually 'form:schlagwoerter' and 'form:schlagwortOptionen')
@@ -154,7 +154,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, d
         print("[warn] Rerun")
         page = await page.context.new_page()  # Reset page context
         await open_startpage(debug=debug)
-        await perform_search(keyword, mode, register_number=register_number, debug=debug)
+        await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option, debug=debug)
         return
 
     # Print outerHTML
@@ -162,20 +162,39 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, d
         #await _debug_dump_element(page, "#form\\:schlagwoerter", "schlagwoerter")
 
     #If a register number is provided, fill it in:
-    if register_number:
-        try:
-            await page.fill("#form\\:registerNummer", register_number)
-        except Exception:
-            print("[warn] Could not fill 'registerNummer' by ID")
-            print("[warn] Rerun")
-            page = await page.context.new_page()  # Reset page context
-            await open_startpage(debug=debug)
-            await perform_search(keyword, mode, register_number=register_number, debug=debug)
-            return
+
+    try:
+        if register_number is None:
+            register_number = ""
+        await page.fill("#form\\:registerNummer", register_number)
+    except Exception:
+        print("[warn] Could not fill 'registerNummer' by ID")
+        print("[warn] Rerun")
+        page = await page.context.new_page()  # Reset page context
+        await open_startpage(debug=debug)
+        await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option, debug=debug)
+        return
 
         #Print outerHTML
         #if debug:
             #await _debug_dump_element(page, "#form\\:registerNummer", "registerNummer")
+
+    if postal_code_option:
+        # Fill postal code if provided
+        try:
+            if postal_code is None:
+                postal_code = ""
+            await page.fill("#form\\:postleitzahl", postal_code)
+            if debug:
+                print("[debug] postal code:", postal_code)
+        except Exception:
+            print("[warn] Could not fill 'postleitzahl' by ID")
+            print("[warn] Rerun")
+            page = await page.context.new_page()  # Reset page context
+            await open_startpage(debug=debug)
+            await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option, debug=debug)
+            return
+
 
     # Radio/select for schlagwortOptionen:
     so_value = SCHLAGWORT_OPTIONEN[mode]
@@ -193,7 +212,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, d
         print("[warn] Rerun")
         page = await page.context.new_page()  # Reset page context
         await open_startpage(debug=debug)
-        await perform_search(keyword, mode, register_number=register_number, debug=debug)
+        await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option, debug=debug)
         return
 
 
@@ -210,7 +229,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, d
         print("[warn] Rerun")
         page = await page.context.new_page()  # Reset page context
         await open_startpage(debug=debug)
-        await perform_search(keyword, mode, register_number=register_number, debug=debug)
+        await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option, debug=debug)
         return
     #time.sleep(1) # Small pause to ensure results are loaded
 
@@ -411,14 +430,34 @@ async def main_async(args):
                 regno_col=args.regno_col,
                 sap_supplier_col=args.sap_supplier_col,
                 sap_customer_col=args.sap_customer_col,
+                postal_code_col=args.postal_code_col,
                 start=args.start,
                 end=args.end,
             )
 
             print(f"[info] loaded {len(jobs)} jobs from Excel (rows {args.start or 3}..{args.end or 'last'})")
 
+            start_time = time.time() # 1 hour timer to not go over the 60 search limitation (VERY IMPORTANT)
             # Iterate through each job (company) from the Excel list
             for i, job in enumerate(jobs, 1):
+                # Timer logic: every 60 jobs, wait for the remaining time to complete the hour
+                if i % 60 == 0:
+                    elapsed_time = time.time() - start_time
+                    hour_in_seconds = 3600
+
+                    # If less than an hour has passed, wait for remaining time
+                    if elapsed_time < hour_in_seconds:
+                        wait_time = hour_in_seconds - elapsed_time
+                        print(f"[info] Waiting {wait_time:.0f} seconds to complete the hour...")
+                        await page.wait_for_timeout(wait_time * 1000)  # convert to milliseconds
+
+                    # Reset the timer
+                    start_time = time.time()
+                    print("[info] Hour timer reset")
+                    page = await context.new_page()  # Reset page context
+                    await open_startpage(debug=args.debug)
+
+
                 if job["name"] is None:
                     print(f"[warn] Skipping job {i}: no company name provided.")
 
@@ -426,6 +465,7 @@ async def main_async(args):
                 kw = job["name"]  # Company name to search for
                 reg = job["register_no"]  # Register number (if available)
                 sap = job["sap"]  # SAP number (if available)
+                postal_code = job["postal_code"]  # Postal code (if available)
 
                 if args.debug:
                     print("")
@@ -435,17 +475,26 @@ async def main_async(args):
                 #await open_startpage(page, debug=args.debug)
 
                 # Perform the advanced search with the name + optional register number
-                await perform_search(kw, args.schlagwortOptionen, register_number=reg, debug=args.debug)
+                await perform_search(kw, args.schlagwortOptionen, register_number=reg, postal_code=postal_code, postal_code_option=args.postal, debug=args.debug)
+                print(f"[debug] {kw} | reg={reg or 'None'}")
 
                 # Retrieve the search results (list of rows)
                 results = await get_results(debug=args.debug)
 
                 # If we don't have exactly one match, log it to HumanCheck.txt and skip
+                check_file = os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
+                f = open(check_file, "a")
                 if len(results) != 1:
-                    check_file = os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
-                    with open(check_file, "a") as f:
-                        f.write(f"\n\n[info] found {len(results)} result row(s) for '{kw}' (SAP={sap or 'None'})")
+                    f.write(f"\n[info] found {len(results)} result row(s) for '{kw}' (SAP={sap or 'None'})")
                     print(f"[warn] {kw}: expected 1 result, got {len(results)} → logged to HumanCheck.txt")
+                    exel.write_to_excel_error(
+                        path=args.excel,
+                        sheet=args.sheet,
+                        row=i + args.start - 1,  # Adjust for 0-based index
+                        changes_check_col=args.changes_check_col,
+                    )
+                    print(
+                        f"[warn] Failed '{kw}' (SAP={sap or 'None'}); marked row {i + args.start - 1} in Excel as error.")
                     continue  # Skip to next company
 
                 # If PDF download is enabled, download the AD (Current hard copy printout)
@@ -460,25 +509,50 @@ async def main_async(args):
                         sap_number=sap,  # Prefix SAP number to the filename if available
                         debug=args.debug,
                     )
-                
+
                 if path is not None:
-                    update_info = PDFScanner.extract_from_pdf(path) | {"company_name": company_name} # Extract fields from the downloaded PDF into a dict, override company_name with umlauts replaced
+                    update_info = PDFScanner.extract_from_pdf(path) | {"company_name": company_name, "sap_number": sap, "download_path": path} # Extract fields from the downloaded PDF into a dict, override company_name with umlauts replaced
+                    if update_info["register_type"] == "unexpected Format":
+                        f.write(f"[warn] Error, unexpected PDF Format '{company_name}' (SAP={sap or 'None'}) in row {i + args.start - 1}")
+                        print(f"[warn] Error, unexpected PDF Format '{company_name}' (SAP={sap or 'None'})")
+                        exel.write_to_excel_error(
+                            path=args.excel,
+                            sheet=args.sheet,
+                            row=i + args.start - 1,  # Adjust for 0-based index
+                            changes_check_col=args.changes_check_col,
+                            pdf_path = path,  # Save the path of PDF in excel
+                            pdf_path_col=args.doc_path_col,
+                        )
+                        continue
                     exel.write_update_to_excel(
                         path=args.excel,
                         sheet=args.sheet,
                         row=i + args.start - 1,  # Adjust for 0-based index
-                        update_info=update_info,
+                        update_info=update_info, # All info to update
                         name_col=args.name_col,
                         regno_col=args.regno_col,
                         sap_supplier_col=args.sap_supplier_col,
                         sap_customer_col=args.sap_customer_col,
+                        name2_col=args.name2_col,
+                        name3_col=args.name3_col,
+                        street_col=args.street_col,
+                        house_number_col=args.house_number_col,
+                        city_col=args.city_col,
+                        postal_code_col=args.postal_code_col,
+                        doc_path_col=args.doc_path_col,
+                        changes_check_col=args.changes_check_col,
+                        date_check_col=args.date_check_col,
+                        register_type_col=args.register_type_col,
+                        check_file=os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
                     )
+                    print(f"[info] Updated Excel row {i + args.start - 1} for '{company_name}' (SAP={sap or 'None'})")
+
 
                 
                 # Small pause to avoid sending requests too quickly
                 await page.wait_for_timeout(1000)
 
-
+        """
         #TODO: Single-shot mode
         else:
             if not args.schlagwoerter:
@@ -518,6 +592,7 @@ async def main_async(args):
             
             if path is not None:
                     res_dic = PDFScanner.extract_from_pdf(path)  # Extract fields from the downloaded PDF into a dict
+        """
                     
 
         await context.close()
@@ -529,6 +604,11 @@ def parse_args():
     parser.add_argument(
         "-d", "--debug",
         help="Enable debug-style prints",
+        action="store_true"
+    )
+    parser.add_argument(
+        "-postal", "--postal",
+        help="Perform search with postal code",
         action="store_true"
     )
     parser.add_argument(
@@ -569,20 +649,26 @@ def parse_args():
     parser.add_argument("--regno-col", default="AF", help="Excel column with register number (default AF)")
     parser.add_argument("--sap-supplier-col", default="A", help="Excel column with supplier SAP no. (default A)")
     parser.add_argument("--sap-customer-col", default="B", help="Excel column with customer SAP no. (default B)")
+
+    # excel columns need to be changed
     parser.add_argument("--name2-col", default="D", help="Excel column with Name2 (default D)")
     parser.add_argument("--name3-col", default="E", help="Excel column with Name3 (default E)")
     parser.add_argument("--street-col", default="F", help="Excel column with Street (default F)")
-    parser.add_argument("--sap-customer-col", default="G", help="Excel column with house number (default G)")
+    parser.add_argument("--house-number-col", default="G", help="Excel column with house number (default G)")
     parser.add_argument("--city-col", default="H", help="Excel column with City (default H)")
     parser.add_argument("--postal-code-col", default="I", help="Excel column with Postal Code (default I)")
+    parser.add_argument("--doc-path-col", default="P", help="Excel column with document stored (default P)")
+    parser.add_argument("--changes-check-col", default="Q", help="Excel column with Changes necessary (default Q)")
+    parser.add_argument("--date-check-col", default="S", help="Excel column with Date of last check (default S)")
+    parser.add_argument("--register-type-col", default="AG", help="Excel column with Register type (default AG)")
     #parser.add_argument("--country-col", default="J", help="Excel column with Country (default J)")
 
 
     parser.add_argument(
         "--start",
         type=int,
-        default=1,
-        help="Start row (1-based) in the Excel sheet to process (default: first row)."
+        default=3,
+        help="Start row (comapnies start at row 3)."
     )
     parser.add_argument(
         "--end",

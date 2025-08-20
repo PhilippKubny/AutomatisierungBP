@@ -7,8 +7,99 @@ import sys
 import pandas as pd
 from string import ascii_uppercase
 from datetime import date
+from openpyxl import load_workbook
 
 from playwright.async_api import async_playwright, TimeoutError as PwTimeoutError
+
+
+def write_to_excel_error(
+        path, sheet, row, changes_check_col, pdf_path=None, pdf_path_col=None):
+    wb = load_workbook(path)
+    ws = wb[sheet] if sheet else wb.active
+
+    ws[f"{changes_check_col}{row}"] = "yes"
+    if pdf_path:
+        ws[f"{pdf_path_col}{row}"] = pdf_path
+    wb.save(path)
+    wb.close()
+    return False
+
+
+def _col_letter_to_idx(letter: str) -> int:
+    letter = letter.strip().upper()
+    idx = 0
+    for ch in letter:
+        idx = idx * 26 + (ord(ch) - ord('A') + 1)
+    return idx - 1  # 0-based
+
+
+def _norm_sap(v):
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return None
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    s = str(v).strip()
+    return s or None
+
+
+def write_update_to_excel(
+        path, sheet, row, update_info,
+        name_col, regno_col, sap_supplier_col, sap_customer_col,
+        name2_col, name3_col, street_col, house_number_col, city_col, postal_code_col,
+        doc_path_col, changes_check_col, date_check_col, register_type_col, check_file
+):
+    """
+    HYBRID: Use pandas to check/decide; use openpyxl to write (keeps formatting).
+    Returns True if the row was updated.
+    """
+
+    # ---- pandas phase: read sheet & check SAP match ----
+    df = pd.read_excel(path, sheet_name=sheet, header=None)
+    r = row-1
+
+    sup_idx = _col_letter_to_idx(sap_supplier_col) if sap_supplier_col else None
+    cus_idx = _col_letter_to_idx(sap_customer_col) if sap_customer_col else None
+    sap_supplier = _norm_sap(df.iat[r, sup_idx]) if sup_idx is not None else None
+    sap_customer = _norm_sap(df.iat[r, cus_idx]) if cus_idx is not None else None
+    sap_new = _norm_sap(update_info.get("sap_number"))
+
+    # ---- openpyxl phase: write only the touched cells (preserve formatting) ----
+    wb = load_workbook(path)
+    ws = wb[sheet] if sheet else wb.active
+
+    if not sap_new or (sap_new != sap_supplier and sap_new != sap_customer):
+        print(f"[warn] SAP mismatch at row {row}: "
+              f"new={sap_new}, supplier={sap_supplier}, customer={sap_customer}")
+        ws[f"{changes_check_col}{row}"] = "yes"
+        f = open(check_file, "a")
+        f.write(
+            f"[warn] SAP mismatch at row {row}: "
+              f"new={sap_new}, supplier={sap_supplier}, customer={sap_customer}")
+        return False  # no change
+
+    ws[f"{name_col}{row}"] = update_info.get("company_name", "")
+    if name3_col: ws[f"{name3_col}{row}"] = ""  # Name3 blank, as requested
+
+    ws[f"{street_col}{row}"] = update_info.get("street", "")
+    ws[f"{house_number_col}{row}"] = update_info.get("house_number", "")
+    ws[f"{postal_code_col}{row}"] = update_info.get("postal_code", "")
+    ws[f"{city_col}{row}"] = update_info.get("city", "")
+
+    ws[f"{register_type_col}{row}"] = update_info.get("register_type", "")
+    ws[f"{regno_col}{row}"] = update_info.get("register_number", "")
+
+    ws[f"{doc_path_col}{row}"] = update_info.get("download_path", "")
+
+    ws[f"{changes_check_col}{row}"] = "no"
+
+    # Write an actual Excel date (keeps number format)
+    cell = ws[f"{date_check_col}{row}"]
+    cell.value = date.today().strftime("%d-%m-%Y")
+
+    wb.save(path)
+    wb.close()
+    return True
+
 
 def col_letter_to_idx(letter: str) -> int:
     """
@@ -30,7 +121,7 @@ def col_letter_to_idx(letter: str) -> int:
 
 
 def read_jobs_from_excel(path: str, sheet: str | None, name_col: str, regno_col: str | None,
-                         sap_supplier_col: str | None, sap_customer_col: str | None, start: int | None,
+                         sap_supplier_col: str | None, sap_customer_col: str | None, postal_code_col: str | None, start: int | None,
                          end: int | None):
     """
     Read company data from an Excel file and return a list of jobs to process.
@@ -85,6 +176,7 @@ def read_jobs_from_excel(path: str, sheet: str | None, name_col: str, regno_col:
         register_no = safe_get(row, regno_col)
         sap_supplier = safe_get(row, sap_supplier_col)
         sap_customer = safe_get(row, sap_customer_col) if sap_customer_col else None
+        postal_code = safe_get(row, postal_code_col)
 
         # Prefer supplier SAP, else customer SAP, else None
         sap_raw = sap_supplier if sap_supplier not in (None, "") else sap_customer
@@ -99,6 +191,7 @@ def read_jobs_from_excel(path: str, sheet: str | None, name_col: str, regno_col:
             "name": str(name).strip(),
             "register_no": str(register_no).strip() if register_no not in (None, "") else None,
             "sap": sap,
+            "postal_code": str(postal_code).strip() if postal_code not in (None, "") else None,
         })
 
     return jobs
@@ -145,7 +238,42 @@ def main():
         print(job)
 
 
+def secondary_main():
+    """
+    This is a secondary main function to demonstrate how to use the write_upadte_to_exel function.
+    It can be used for testing or as a standalone script.
+    """
+    updated = write_update_to_excel(
+        path=r"C:\Users\Nguyen-Bang\Downloads\TestBP.xlsx",
+        sheet="Tabelle1",
+        row=3,
+        update_info={
+            "sap_number": "11000017",
+            "company_name": "ACME GmbH",
+            "register_type": "HRB",
+            "register_number": "26718",
+            "street": "MUSTERSTRASSE",
+            "house_number": "12A",
+            "postal_code": "80331",
+            "city": "MUENCHEN",
+            "download_path": r"C:\Users\Nguyen-Bang\Downloads\BP\11000017_CARL KURT WALTHER GMBH & CO. KG_20-08-2025.pdf",
+        },
+        name_col="C",
+        regno_col="AF",
+        sap_supplier_col="A",
+        sap_customer_col="B",
+        name2_col="D",
+        name3_col="E",
+        street_col="F",
+        house_number_col="G",
+        city_col="H",
+        postal_code_col="I",
+        doc_path_col="P",
+        changes_check_col="Q",
+        date_check_col="S",
+        register_type_col="AG",
+    )
 
 
 if __name__ == "__main__":
-    main()
+    secondary_main()
