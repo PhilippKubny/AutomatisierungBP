@@ -20,9 +20,12 @@ import pandas as pd
 from string import ascii_uppercase
 from datetime import date
 import exel
+import PDFScanner
 
 from playwright.async_api import async_playwright, TimeoutError as PwTimeoutError
 
+
+page = None  # Global page object for async context
 
 # Map to existing CLI semantics
 SCHLAGWORT_OPTIONEN = {
@@ -81,107 +84,16 @@ async def _debug_dump_results(page, clip: int = 5000):
         print(f"[debug] could not dump body: {e}")
 
 
-
-#TODO: Excel helper functions
-
-def col_letter_to_idx(letter: str) -> int:
-    """
-    Convert an Excel-style column letter into a zero-based index.
-    Examples:
-        'A'  -> 0
-        'B'  -> 1
-        ...
-        'Z'  -> 25
-        'AA' -> 26
-    """
-    letter = letter.strip().upper()  # Remove whitespace and normalize to uppercase
-    idx = 0
-    for ch in letter:
-        # Shift previous value by 26 and add current letter position
-        # 'A' is 1, 'B' is 2, ..., 'Z' is 26
-        idx = idx * 26 + (ord(ch) - ord('A') + 1)
-    return idx - 1  # Convert from 1-based to 0-based index
-
-
-def read_jobs_from_excel(path: str, sheet: str | None, name_col: str, regno_col: str | None,
-                         sap_supplier_col: str | None, sap_customer_col: str | None, start: int | None,
-                         end: int | None):
-    """
-    Read company data from an Excel file and return a list of jobs to process.
-
-    Parameters:
-        path               - Path to the Excel file (e.g., "TestBP.xlsx")
-        sheet              - Optional sheet name (None = first sheet)
-        name_col           - Column letter for company name (Name1)
-        regno_col          - Column letter for register number (AF) or None
-        sap_supplier_col   - Column letter for supplier SAP number (A) or None
-        sap_customer_col   - Column letter for customer SAP number (other col) or None
-        limit              - Maximum number of rows to process (None = all)
-
-    Returns:
-        List of dicts with keys: "name", "register_no", "sap"
-    """
-    # Read the Excel file with no header row (so we can use absolute column positions)
-    df = pd.read_excel(path, sheet_name=sheet, header=None)  # absolute column positions
-    total_rows = len(df)
-
-    # Normalize 1-based bounds → clamp to [1, total_rows]
-    s = start if (start and start > 0) else 1
-    e = end if (end and end > 0) else total_rows
-    if s > total_rows:  # nothing to do
-        return []
-    if e < s:
-        return []
-
-    # Slice rows (convert to 0-based iloc)
-    df_slice = df.iloc[s - 1:e]
-
-    def safe_get(row, col_letter: str | None):
-        if not col_letter:
-            return None
-        idx = col_letter_to_idx(col_letter)
-        if idx < 0 or idx >= len(row):
-            return None
-        val = row.iloc[idx]
-        return None if (pd.isna(val) or (isinstance(val, str) and val.strip() == "")) else val
-
-    jobs = []
-    for _, row in df_slice.iterrows():
-        name = safe_get(row, name_col)
-        if not name:
-            continue  # skip rows without a company name
-
-        register_no = safe_get(row, regno_col)
-        sap_supplier = safe_get(row, sap_supplier_col)
-        sap_customer = safe_get(row, sap_customer_col) if sap_customer_col else None
-
-        # Prefer supplier SAP, else customer SAP, else None
-        sap_raw = sap_supplier if sap_supplier not in (None, "") else sap_customer
-
-        # Normalize SAP (Excel often gives numerics as floats)
-        if isinstance(sap_raw, float) and sap_raw.is_integer():
-            sap = str(int(sap_raw))
-        else:
-            sap = str(sap_raw).strip() if sap_raw not in (None, "") else None
-
-        jobs.append({
-            "name": str(name).strip(),
-            "register_no": str(register_no).strip() if register_no not in (None, "") else None,
-            "sap": sap,
-        })
-
-    return jobs
-
-
 #TODO: Perform search
 
-async def open_startpage(page, debug=False):
+async def open_startpage(debug=False):
     # Landing page → ensure we land on welcome.xhtml
+    global page
     await page.goto("https://www.handelsregister.de/rp_web/welcome.xhtml", wait_until="domcontentloaded")
     if debug:
         print("[debug] opened welcome page:", page.url)
 
-async def perform_search(page, keyword: str, mode: str, register_number: str = None, debug=False):
+async def perform_search(keyword: str, mode: str, register_number: str = None, debug=False):
     """
     Click 'Advanced search', fill the form, submit.
     """
@@ -189,9 +101,10 @@ async def perform_search(page, keyword: str, mode: str, register_number: str = N
     # On German UI it may be "Erweiterte Suche". We try both.
     # Prefer a robust selector by partial text.
     # Open Advanced Search (prefer fixed ID; keep fallbacks)
+    global page
     clicked = False
     try:
-        await page.click("#naviForm\\:erweiterteSucheLink", timeout=3000)
+        await page.click("#naviForm\\:erweiterteSucheLink", timeout=10000)
         clicked = True
     except Exception:
         # fallbacks by text (en/de)
@@ -210,19 +123,39 @@ async def perform_search(page, keyword: str, mode: str, register_number: str = N
                 pass
 
     if not clicked:
-        raise RuntimeError("Could not open Advanced search. UI may have changed.")
+        print("[warn] Could not open Advanced search. UI may have changed.")
+        print("[warn] Rerun")
+        page = await page.context.new_page()  # Reset page context
+        await open_startpage(debug=debug)
+        await perform_search(keyword, mode, register_number=register_number, debug=debug)
+        return
 
     # Wait for the form to be present (use a field we know)
-    await page.wait_for_selector("#form\\:schlagwoerter", timeout=10000)
+    try:
+        await page.wait_for_selector("#form\\:schlagwoerter", timeout=10000)
+    except PwTimeoutError:
+        print("[warn] Advanced search form not found; UI may have changed.")
+        print("[warn] Rerun")
+        page = await page.context.new_page()  # Reset page context
+        await open_startpage(debug=debug)
+        await perform_search(keyword, mode, register_number=register_number, debug=debug)
+        return
 
     # Form fields (JSF IDs usually 'form:schlagwoerter' and 'form:schlagwortOptionen')
     # We'll try robust selectors by id and by name.
     # Keyword input:
     try:
+        words = [w for w in re.split(r"[ -]+", keyword) if w]
+        first_five = " ".join(words[:5])
+        keyword = first_five  # Limit to first 5 words for search
         await page.fill("#form\\:schlagwoerter", keyword)
     except Exception:
-        # fallback: look for input with name form:schlagwoerter
-        await page.fill("input[name='form:schlagwoerter']", keyword)
+        print("[warn] Could not fill 'schlagwoerter' by ID")
+        print("[warn] Rerun")
+        page = await page.context.new_page()  # Reset page context
+        await open_startpage(debug=debug)
+        await perform_search(keyword, mode, register_number=register_number, debug=debug)
+        return
 
     # Print outerHTML
     #if debug:
@@ -233,7 +166,13 @@ async def perform_search(page, keyword: str, mode: str, register_number: str = N
         try:
             await page.fill("#form\\:registerNummer", register_number)
         except Exception:
-            await page.fill("input[name='form:registerNummer']", register_number)
+            print("[warn] Could not fill 'registerNummer' by ID")
+            print("[warn] Rerun")
+            page = await page.context.new_page()  # Reset page context
+            await open_startpage(debug=debug)
+            await perform_search(keyword, mode, register_number=register_number, debug=debug)
+            return
+
         #Print outerHTML
         #if debug:
             #await _debug_dump_element(page, "#form\\:registerNummer", "registerNummer")
@@ -247,10 +186,16 @@ async def perform_search(page, keyword: str, mode: str, register_number: str = N
 
     # Submit the form by clicking the search button (works even if only registerNummer is filled)
     try:
-        await page.click("#form\\:btnSuche", timeout=2000) # ID for the search button
+        await page.click("#form\\:btnSuche", timeout=15000) # ID for the search button
     except Exception:
         # Fallback by button label
-        await page.get_by_role("button", name="Suchen").click()
+        print("[warn] Could not find search button by ID; trying by role.")
+        print("[warn] Rerun")
+        page = await page.context.new_page()  # Reset page context
+        await open_startpage(debug=debug)
+        await perform_search(keyword, mode, register_number=register_number, debug=debug)
+        return
+
 
     if debug:
         print("[debug] clicked search; waiting for results…")
@@ -259,22 +204,21 @@ async def perform_search(page, keyword: str, mode: str, register_number: str = N
     try:
         await page.locator(
             "#ergebnissForm\\:selectedSuchErgebnisFormTable_data"
-        ).first.wait_for(timeout=5000)
+        ).first.wait_for(timeout=20000)
     except PwTimeoutError:
-        # If the results table is not found, it may be a different page or no results.
-        # We can check for a message or the URL change.
-        if "keine Ergebnisse" in await page.content():
-            print("[warn] No results found for the search criteria.")
-            return
-        else:
-            raise RuntimeError("Results table not found; check if the search was successful.")
+        print("[warn] Results table not found; UI may have changed.")
+        print("[warn] Rerun")
+        page = await page.context.new_page()  # Reset page context
+        await open_startpage(debug=debug)
+        await perform_search(keyword, mode, register_number=register_number, debug=debug)
+        return
     #time.sleep(1) # Small pause to ensure results are loaded
 
     if debug:
         #await _debug_dump_results(page)
         print("[debug] results page:", page.url)
 
-async def get_results(page, debug=False):
+async def get_results(debug=False):
     """
     Scrape the visible rows of the results table (first page).
     Returns list of dicts with minimal fields, and row locators for clicking AD per row.
@@ -356,7 +300,7 @@ def replace_umlauts(text):
         text = text.replace(umlaut, replacement)
     return text
 
-async def download_ad_for_row(page, row_locator, company_name, outdir, sap_number=None, debug=False):
+async def download_ad_for_row(row_locator, company_name, outdir, sap_number=None, debug=False):
     """
     Waits for the single search result, clicks the AD link, and saves the PDF as
     '<Company>_dd.mm.yyyy.pdf'. Returns the saved path or None on failure.
@@ -364,7 +308,7 @@ async def download_ad_for_row(page, row_locator, company_name, outdir, sap_numbe
     #for now only one row is expected,
     #TODO: if more than one row is found, iterate over them, use row_locator
     #Uppercase and replace umlauts in company name
-    company_name = replace_umlauts(company_name.upper())
+    global page
     try:
         #Check if the outdir exists, if not create it
         os.makedirs(outdir, exist_ok=True)
@@ -384,12 +328,15 @@ async def download_ad_for_row(page, row_locator, company_name, outdir, sap_numbe
 
         # Trigger and capture the download
         try:
-            async with page.expect_download(timeout=5000) as dl_info:
+            async with page.expect_download(timeout=25000) as dl_info:
                 await ad_link.click()
             download = await dl_info.value
             if debug:
                 print(f"[debug] Download started for '{company_name}': {download.suggested_filename}")
         except Exception:
+            check_file = os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
+            with open(check_file, "a") as f:
+                f.write(f"\n\n[warn] Failed to click AD link for '{company_name}'; download may not have started. (SAP={sap_number or 'None'})")
             if debug:
                 print(f"[warn] Failed to click AD link for '{company_name}'; download may not have started.")
             return None
@@ -401,9 +348,15 @@ async def download_ad_for_row(page, row_locator, company_name, outdir, sap_numbe
         save_path = os.path.join(outdir, fname)
 
         await download.save_as(save_path)
-        if debug:
-            print(f"[debug] Saved AD PDF: {save_path}")
-        return save_path
+        # Verify the file exists and has size > 0 (not corrupted)
+        if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
+            if debug:
+                print(f"[debug] Saved AD PDF: {save_path}")
+            return save_path
+        else:
+            if debug:
+                print(f"[warn] PDF download failed or file empty: {save_path}")
+            return None
 
     except Exception as e:
         if debug:
@@ -427,6 +380,7 @@ async def main_async(args):
           - Logging cases where results are ambiguous
     """
     # Ensure output dir
+    global page
     if not os.path.exists(args.outdir):
         default_path = os.path.join(os.path.expanduser("~"), "Downloads", "BP")
         print(f"[warn] Path not found: {args.outdir}")
@@ -442,7 +396,7 @@ async def main_async(args):
         context = await browser.new_context(accept_downloads=True, locale="en-GB")
         page = await context.new_page()
 
-        await open_startpage(page, debug=args.debug)
+        await open_startpage(debug=args.debug)
 
 
 
@@ -450,7 +404,7 @@ async def main_async(args):
         #TODO: Excel batch mode
         if args.excel:
             # Read company/job data from Excel using helper function
-            jobs = read_jobs_from_excel(
+            jobs = exel.read_jobs_from_excel(
                 path=args.excel,
                 sheet=args.sheet,
                 name_col=args.name_col,
@@ -461,10 +415,14 @@ async def main_async(args):
                 end=args.end,
             )
 
-            print(f"[info] loaded {len(jobs)} jobs from Excel (rows {args.start or 1}..{args.end or 'last'})")
+            print(f"[info] loaded {len(jobs)} jobs from Excel (rows {args.start or 3}..{args.end or 'last'})")
 
             # Iterate through each job (company) from the Excel list
             for i, job in enumerate(jobs, 1):
+                if job["name"] is None:
+                    print(f"[warn] Skipping job {i}: no company name provided.")
+
+                    continue
                 kw = job["name"]  # Company name to search for
                 reg = job["register_no"]  # Register number (if available)
                 sap = job["sap"]  # SAP number (if available)
@@ -477,10 +435,10 @@ async def main_async(args):
                 #await open_startpage(page, debug=args.debug)
 
                 # Perform the advanced search with the name + optional register number
-                await perform_search(page, kw, args.schlagwortOptionen, register_number=reg, debug=args.debug)
+                await perform_search(kw, args.schlagwortOptionen, register_number=reg, debug=args.debug)
 
                 # Retrieve the search results (list of rows)
-                results = await get_results(page, debug=args.debug)
+                results = await get_results(debug=args.debug)
 
                 # If we don't have exactly one match, log it to HumanCheck.txt and skip
                 if len(results) != 1:
@@ -491,17 +449,32 @@ async def main_async(args):
                     continue  # Skip to next company
 
                 # If PDF download is enabled, download the AD (Current hard copy printout)
+                path = None
+                r = results[0]  # The single matching result TODO: Multiple if needed
+                company_name = replace_umlauts(r["name"].upper()) # Uppercase and replace umlauts
                 if args.download_ad:
-                    r = results[0]  # The single matching result TODO: Multiple if needed
-                    await download_ad_for_row(
-                        page=page,
+                    path = await download_ad_for_row(
                         row_locator=r["row_locator"],
-                        company_name=r["name"] or kw,
+                        company_name=company_name,
                         outdir=args.outdir,
                         sap_number=sap,  # Prefix SAP number to the filename if available
                         debug=args.debug,
                     )
+                
+                if path is not None:
+                    update_info = PDFScanner.extract_from_pdf(path) | {"company_name": company_name} # Extract fields from the downloaded PDF into a dict, override company_name with umlauts replaced
+                    exel.write_update_to_excel(
+                        path=args.excel,
+                        sheet=args.sheet,
+                        row=i + args.start - 1,  # Adjust for 0-based index
+                        update_info=update_info,
+                        name_col=args.name_col,
+                        regno_col=args.regno_col,
+                        sap_supplier_col=args.sap_supplier_col,
+                        sap_customer_col=args.sap_customer_col,
+                    )
 
+                
                 # Small pause to avoid sending requests too quickly
                 await page.wait_for_timeout(1000)
 
@@ -511,8 +484,8 @@ async def main_async(args):
             if not args.schlagwoerter:
                 print("In single-shot mode you must provide --schlagwoerter.")
                 return
-            await perform_search(page, args.schlagwoerter, args.schlagwortOptionen, register_number=args.register_number, debug=args.debug)
-            results = await get_results(page, debug=args.debug)
+            await perform_search(args.schlagwoerter, args.schlagwortOptionen, register_number=args.register_number, debug=args.debug)
+            results = await get_results(debug=args.debug)
             if len(results) != 1:
                 # Write to HumanCheck.txt in Downloads
                 check_file = os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
@@ -529,11 +502,11 @@ async def main_async(args):
                 return
             #check if only one result is found, if more TODO: interation already exists
 
+            path = None  # Initialize path to None
             if args.download_ad and len(results) == 1:
                 # Process each row and click AD
                 for r in results:
-                    await download_ad_for_row(
-                        page=page,
+                    path = await download_ad_for_row(
                         row_locator=r["row_locator"],
                         company_name=r["name"] or "company",
                         outdir=args.outdir,
@@ -542,6 +515,10 @@ async def main_async(args):
                     )
                     # Small pause to be gentle (adjust if needed)
                     #await page.wait_for_timeout(1200)
+            
+            if path is not None:
+                    res_dic = PDFScanner.extract_from_pdf(path)  # Extract fields from the downloaded PDF into a dict
+                    
 
         await context.close()
         await browser.close()
@@ -591,11 +568,20 @@ def parse_args():
     parser.add_argument("--name-col", default="C", help="Excel column with Name1 (default C)")
     parser.add_argument("--regno-col", default="AF", help="Excel column with register number (default AF)")
     parser.add_argument("--sap-supplier-col", default="A", help="Excel column with supplier SAP no. (default A)")
-    parser.add_argument("--sap-customer-col", default="B", help="Excel column with customer SAP no. (optional)")
+    parser.add_argument("--sap-customer-col", default="B", help="Excel column with customer SAP no. (default B)")
+    parser.add_argument("--name2-col", default="D", help="Excel column with Name2 (default D)")
+    parser.add_argument("--name3-col", default="E", help="Excel column with Name3 (default E)")
+    parser.add_argument("--street-col", default="F", help="Excel column with Street (default F)")
+    parser.add_argument("--sap-customer-col", default="G", help="Excel column with house number (default G)")
+    parser.add_argument("--city-col", default="H", help="Excel column with City (default H)")
+    parser.add_argument("--postal-code-col", default="I", help="Excel column with Postal Code (default I)")
+    #parser.add_argument("--country-col", default="J", help="Excel column with Country (default J)")
+
+
     parser.add_argument(
         "--start",
         type=int,
-        default=None,
+        default=1,
         help="Start row (1-based) in the Excel sheet to process (default: first row)."
     )
     parser.add_argument(
@@ -604,6 +590,7 @@ def parse_args():
         default=None,
         help="End row (1-based, inclusive) in the Excel sheet to process (default: last row)."
     )
+
 
     return parser.parse_args()
 

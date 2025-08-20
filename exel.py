@@ -47,7 +47,7 @@ def read_jobs_from_excel(path: str, sheet: str | None, name_col: str, regno_col:
     Returns:
         List of dicts with keys: "name", "register_no", "sap"
     """
-    # Read the Excel file with no header row (so we can use absolute column positions)
+    # Read the Excel file with header row
     df = pd.read_excel(path, sheet_name=sheet, header=None)  # absolute column positions
     total_rows = len(df)
 
@@ -75,6 +75,11 @@ def read_jobs_from_excel(path: str, sheet: str | None, name_col: str, regno_col:
     for _, row in df_slice.iterrows():
         name = safe_get(row, name_col)
         if not name:
+            jobs.append({
+                "name": None,
+                "register_no": None,
+                "sap": None,
+            })
             continue  # skip rows without a company name
 
         register_no = safe_get(row, regno_col)
