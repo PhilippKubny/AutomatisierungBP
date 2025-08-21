@@ -187,9 +187,15 @@ def read_jobs_from_excel(path: str, sheet: str | None, name_col: str, regno_col:
         else:
             sap = str(sap_raw).strip() if sap_raw not in (None, "") else None
 
+        # Normalize register number
+        if isinstance(register_no, float) and register_no.is_integer():
+            register_no = str(int(register_no))
+        else:
+            register_no = str(register_no).strip() if register_no not in (None, "") else None
+
         jobs.append({
             "name": str(name).strip(),
-            "register_no": str(register_no).strip() if register_no not in (None, "") else None,
+            "register_no": register_no,
             "sap": sap,
             "postal_code": str(postal_code).strip() if postal_code not in (None, "") else None,
         })

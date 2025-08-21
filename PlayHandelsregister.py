@@ -26,6 +26,7 @@ from playwright.async_api import async_playwright, TimeoutError as PwTimeoutErro
 
 
 page = None  # Global page object for async context
+counter = 0 #for timer logic
 
 # Map to existing CLI semantics
 SCHLAGWORT_OPTIONEN = {
@@ -102,6 +103,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
     # Prefer a robust selector by partial text.
     # Open Advanced Search (prefer fixed ID; keep fallbacks)
     global page
+    global counter
     clicked = False
     try:
         await page.click("#naviForm\\:erweiterteSucheLink", timeout=10000)
@@ -219,6 +221,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
     if debug:
         print("[debug] clicked search; waiting for results…")
 
+    counter += 1 # Successfully clicked on search -> counter +1
     # Wait for results table, check for specific section in HTML body
     try:
         await page.locator(
@@ -400,6 +403,7 @@ async def main_async(args):
     """
     # Ensure output dir
     global page
+    global counter
     if not os.path.exists(args.outdir):
         default_path = os.path.join(os.path.expanduser("~"), "Downloads", "BP")
         print(f"[warn] Path not found: {args.outdir}")
@@ -441,7 +445,7 @@ async def main_async(args):
             # Iterate through each job (company) from the Excel list
             for i, job in enumerate(jobs, 1):
                 # Timer logic: every 60 jobs, wait for the remaining time to complete the hour
-                if i % 60 == 0:
+                if counter >= 60:
                     elapsed_time = time.time() - start_time
                     hour_in_seconds = 3600
 
@@ -463,7 +467,7 @@ async def main_async(args):
 
                     continue
                 kw = job["name"]  # Company name to search for
-                reg = job["register_no"]  # Register number (if available)
+                reg = str(job["register_no"]) if job["register_no"] is not None else ""  # Register number (if available), normalized if it was in float
                 sap = job["sap"]  # SAP number (if available)
                 postal_code = job["postal_code"]  # Postal code (if available)
 
@@ -552,9 +556,12 @@ async def main_async(args):
                 # Small pause to avoid sending requests too quickly
                 await page.wait_for_timeout(1000)
 
-        """
+        
         #TODO: Single-shot mode
         else:
+            if args.sap_number == "-1":
+                print("In single-shot mode you must provide --sap_number.")
+                return
             if not args.schlagwoerter:
                 print("In single-shot mode you must provide --schlagwoerter.")
                 return
@@ -584,15 +591,49 @@ async def main_async(args):
                         row_locator=r["row_locator"],
                         company_name=r["name"] or "company",
                         outdir=args.outdir,
-                        sap_number=None, # No SAP number in this case TODO
+                        sap_number=args.sap_number, # No SAP number in this case TODO
                         debug=args.debug,
                     )
                     # Small pause to be gentle (adjust if needed)
                     #await page.wait_for_timeout(1200)
             
             if path is not None:
-                    res_dic = PDFScanner.extract_from_pdf(path)  # Extract fields from the downloaded PDF into a dict
-        """
+                    update_info = PDFScanner.extract_from_pdf(path) | {"company_name": results[0]["name"], "sap_number": args.sap_number, "download_path": path} # Extract fields from the downloaded PDF into a dict, override company_name with umlauts replaced
+                    if update_info["register_type"] == "unexpected Format":
+                        f.write(f"[warn] Error, unexpected PDF Format '{results[0]['name']}' (SAP={args.sap_number or 'None'}) in row {i + args.start - 1}")
+                        print(f"[warn] Error, unexpected PDF Format '{results[0]['name']}' (SAP={args.sap_number or 'None'})")
+                        exel.write_to_excel_error(
+                            path=args.excel,
+                            sheet=args.sheet,
+                            row=i + args.start - 1,  # Adjust for 0-based index
+                            changes_check_col=args.changes_check_col,
+                            pdf_path = path,  # Save the path of PDF in excel
+                            pdf_path_col=args.doc_path_col,
+                        )
+                        return
+                    exel.write_update_to_excel(
+                        path=args.excel,
+                        sheet=args.sheet,
+                        row=i + args.start - 1,  # Adjust for 0-based index
+                        update_info=update_info, # All info to update
+                        name_col=args.name_col,
+                        regno_col=args.regno_col,
+                        sap_supplier_col=args.sap_supplier_col,
+                        sap_customer_col=args.sap_customer_col,
+                        name2_col=args.name2_col,
+                        name3_col=args.name3_col,
+                        street_col=args.street_col,
+                        house_number_col=args.house_number_col,
+                        city_col=args.city_col,
+                        postal_code_col=args.postal_code_col,
+                        doc_path_col=args.doc_path_col,
+                        changes_check_col=args.changes_check_col,
+                        date_check_col=args.date_check_col,
+                        register_type_col=args.register_type_col,
+                        check_file=os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
+                    )
+                    print(f"[info] Updated Excel row {i + args.start - 1} for '{company_name}' (SAP={sap or 'None'})")
+        
                     
 
         await context.close()
@@ -640,6 +681,18 @@ def parse_args():
     parser.add_argument(
         "-rn", "--register-number",
         help="Optional: Handelsregisternummer to search for",
+        required=False
+    )
+    parser.add_argument(
+        "-sap", "--sap-number",
+        default="-1",
+        help="Optional: for singelshot only",
+        required=False
+    )
+    parser.add_argument(
+        "-row", "--row-number",
+        default="-1",
+        help="Optional: for singelshot only",
         required=False
     )
     # for excel import
