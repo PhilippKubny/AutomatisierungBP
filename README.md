@@ -25,3 +25,4 @@ PlayHandelsregister.py is the main that automates everything. First, it's inputt
    --regist-number is optional if you know the register number in the handelsregisterbuch
    -sap is the number we give internally in MTU can be read of the excel sheet
    -row correlates to the companies row in the excel sheet (so that the information can be updated in the excel sheet)
+
