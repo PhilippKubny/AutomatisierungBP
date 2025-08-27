@@ -1,8 +1,19 @@
 register type
 
 
-wie oft wiederholen bis abbrechen
+wie oft wiederholen bis abbrechen -> 3
 
 
 blatt sieht anders aus
+
+errors ad download
+
+different format
+
+
+Different country
+
+
+no reach wait for a bit before trying again
+
 

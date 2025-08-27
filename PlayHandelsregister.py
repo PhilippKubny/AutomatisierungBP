@@ -27,6 +27,7 @@ from playwright.async_api import async_playwright, TimeoutError as PwTimeoutErro
 
 page = None  # Global page object for async context
 counter = 0 #for timer logic
+reruns = 0 #for reruns logic
 
 # Map to existing CLI semantics
 SCHLAGWORT_OPTIONEN = {
@@ -83,6 +84,20 @@ async def _debug_dump_results(page, clip: int = 5000):
         print("[debug] results section not found; dumping <body> instead:\n", short)
     except Exception as e:
         print(f"[debug] could not dump body: {e}")
+
+#TODO: No reach, errors
+
+async def rerun_search():
+    global page
+    global reruns
+    reruns += 1
+    if reruns > 3:
+        # sleep for 10 minutes if more than 3 reruns
+        print("[warn] More than 3 reruns, sleeping for 10 minutes to avoid rate limiting...")
+        time.sleep(600)
+        reruns = 0
+    page = await page.context.new_page()  # Reset page context
+    await open_startpage(debug=False)
 
 
 #TODO: Perform search
@@ -356,6 +371,7 @@ async def download_ad_for_row(row_locator, company_name, outdir, sap_number=None
             if debug:
                 print(f"[debug] Download started for '{company_name}': {download.suggested_filename}")
         except Exception:
+
             check_file = os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
             with open(check_file, "a") as f:
                 f.write(f"\n\n[warn] Failed to click AD link for '{company_name}'; download may not have started. (SAP={sap_number or 'None'})")
@@ -434,7 +450,7 @@ async def main_async(args):
                 regno_col=args.regno_col,
                 sap_supplier_col=args.sap_supplier_col,
                 sap_customer_col=args.sap_customer_col,
-                postal_code_col=args.postal_code_col,
+                postal_code_col=args.postal_code_check_col,
                 start=args.start,
                 end=args.end,
             )
@@ -533,7 +549,7 @@ async def main_async(args):
                         sheet=args.sheet,
                         row=i + args.start - 1,  # Adjust for 0-based index
                         update_info=update_info, # All info to update
-                        name_col=args.name_col,
+                        name_col=args.name1_col,
                         regno_col=args.regno_col,
                         sap_supplier_col=args.sap_supplier_col,
                         sap_customer_col=args.sap_customer_col,
@@ -564,6 +580,9 @@ async def main_async(args):
                 return
             if not args.schlagwoerter:
                 print("In single-shot mode you must provide --schlagwoerter.")
+                return
+            if args.row_number == "-1":
+                print("In single-shot mode you must provide --row_number.")
                 return
             await perform_search(args.schlagwoerter, args.schlagwortOptionen, register_number=args.register_number, debug=args.debug)
             results = await get_results(debug=args.debug)
@@ -600,12 +619,11 @@ async def main_async(args):
             if path is not None:
                     update_info = PDFScanner.extract_from_pdf(path) | {"company_name": results[0]["name"], "sap_number": args.sap_number, "download_path": path} # Extract fields from the downloaded PDF into a dict, override company_name with umlauts replaced
                     if update_info["register_type"] == "unexpected Format":
-                        f.write(f"[warn] Error, unexpected PDF Format '{results[0]['name']}' (SAP={args.sap_number or 'None'}) in row {i + args.start - 1}")
                         print(f"[warn] Error, unexpected PDF Format '{results[0]['name']}' (SAP={args.sap_number or 'None'})")
                         exel.write_to_excel_error(
                             path=args.excel,
                             sheet=args.sheet,
-                            row=i + args.start - 1,  # Adjust for 0-based index
+                            row=args.row_number,
                             changes_check_col=args.changes_check_col,
                             pdf_path = path,  # Save the path of PDF in excel
                             pdf_path_col=args.doc_path_col,
@@ -614,9 +632,9 @@ async def main_async(args):
                     exel.write_update_to_excel(
                         path=args.excel,
                         sheet=args.sheet,
-                        row=i + args.start - 1,  # Adjust for 0-based index
+                        row=args.row_number,
                         update_info=update_info, # All info to update
-                        name_col=args.name_col,
+                        name_col=args.name1_col, # Update column
                         regno_col=args.regno_col,
                         sap_supplier_col=args.sap_supplier_col,
                         sap_customer_col=args.sap_customer_col,
@@ -632,7 +650,7 @@ async def main_async(args):
                         register_type_col=args.register_type_col,
                         check_file=os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
                     )
-                    print(f"[info] Updated Excel row {i + args.start - 1} for '{company_name}' (SAP={sap or 'None'})")
+                    print(f"[info] Updated Excel row {args.row} for '{results[0]["name"]}' (SAP={args.sap_number or 'None'})")
         
                     
 
@@ -651,6 +669,11 @@ def parse_args():
         "-postal", "--postal",
         help="Perform search with postal code",
         action="store_true"
+    )
+    parser.add_argument(
+        "--postal-code-check-col",
+        default="I",
+        help="Excel column with Postal Code (default I)"
     )
     parser.add_argument(
         "-s", "--schlagwoerter",
@@ -703,18 +726,19 @@ def parse_args():
     parser.add_argument("--sap-supplier-col", default="A", help="Excel column with supplier SAP no. (default A)")
     parser.add_argument("--sap-customer-col", default="B", help="Excel column with customer SAP no. (default B)")
 
-    # excel columns need to be changed
+    # excel columns need to be changed, only for change not for extraction
+    parser.add_argument("--name1-col", default="T", help="Excel column with Name1 (default T)")
     parser.add_argument("--name2-col", default="D", help="Excel column with Name2 (default D)")
     parser.add_argument("--name3-col", default="E", help="Excel column with Name3 (default E)")
-    parser.add_argument("--street-col", default="F", help="Excel column with Street (default F)")
-    parser.add_argument("--house-number-col", default="G", help="Excel column with house number (default G)")
-    parser.add_argument("--city-col", default="H", help="Excel column with City (default H)")
-    parser.add_argument("--postal-code-col", default="I", help="Excel column with Postal Code (default I)")
+    parser.add_argument("--street-col", default="X", help="Excel column with Street (default X)")
+    parser.add_argument("--house-number-col", default="Y", help="Excel column with house number (default Y)")
+    parser.add_argument("--city-col", default="Z", help="Excel column with City (default Z)")
+    parser.add_argument("--postal-code-col", default="AA", help="Excel column with Postal Code (default AA)") #TODO: check if this is correct
     parser.add_argument("--doc-path-col", default="P", help="Excel column with document stored (default P)")
     parser.add_argument("--changes-check-col", default="Q", help="Excel column with Changes necessary (default Q)")
     parser.add_argument("--date-check-col", default="S", help="Excel column with Date of last check (default S)")
     parser.add_argument("--register-type-col", default="AG", help="Excel column with Register type (default AG)")
-    #parser.add_argument("--country-col", default="J", help="Excel column with Country (default J)")
+    #parser.add_argument("--country-col", default="AB", help="Excel column with Country (default AB)")
 
 
     parser.add_argument(

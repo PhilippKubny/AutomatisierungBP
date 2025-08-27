@@ -98,8 +98,8 @@ def dump_pdf_structure(pdf_path: str, out_txt: str | None = None, max_words: int
 
     dump = "\n".join(lines)
     if out_txt:
-        Path(out_txt).parent.mkdir(parents=True, exist_ok=True)
-        Path(out_txt).write_text(dump, encoding="utf-8")
+        with open(out_txt, "w", encoding="utf-8") as fh:
+            fh.write(dump)
     return dump
 
 
@@ -115,7 +115,7 @@ def scan_directory(in_dir: str, out_csv: str | None = None):
     for p in sorted(in_dir.glob("*.pdf")):
         print(f"Processing {p.name}...")
         dump_pdf_structure(p, out_csv, max_words=10000, max_chars=50000)
-        dump_pdf_bytes(p, out_cs, width=16)
+        #dump_pdf_bytes(p, out_cs, width=16)
 
 
 # --- CLI -------------------------------------------------------------------
