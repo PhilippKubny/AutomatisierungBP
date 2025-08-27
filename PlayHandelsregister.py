@@ -10,6 +10,7 @@ Playwright-based CLI for handelsregister.de
 Note: Respects site behavior; do not exceed rate limits.
 """
 
+
 import argparse
 import asyncio
 import os
