@@ -29,6 +29,7 @@ from playwright.async_api import async_playwright, TimeoutError as PwTimeoutErro
 page = None  # Global page object for async context
 counter = 0 #for timer logic
 reruns = 0 #for reruns logic
+debug = False
 
 # Map to existing CLI semantics
 SCHLAGWORT_OPTIONEN = {
@@ -88,7 +89,7 @@ async def _debug_dump_results(page, clip: int = 5000):
 
 #TODO: No reach, errors
 
-async def rerun_search():
+async def rerun_search(keyword: str, mode: str, register_number: str = None, postal_code: str = None, postal_code_option=False, download=False, company_name=None, sap_number=None, outdir=None):
     global page
     global reruns
     reruns += 1
@@ -97,66 +98,47 @@ async def rerun_search():
         print("[warn] More than 3 reruns, sleeping for 10 minutes to avoid rate limiting...")
         time.sleep(600)
         reruns = 0
+    print("[warn] Rerun")
     page = await page.context.new_page()  # Reset page context
-    await open_startpage(debug=False)
+    await open_startpage()
+    await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option)
+    if download:
+        return await download_ad_for_row(company_name, outdir, sap_number)
+    return None
+
 
 
 #TODO: Perform search
 
-async def open_startpage(debug=False):
+async def open_startpage():
     # Landing page → ensure we land on welcome.xhtml
     global page
+    global debug
     await page.goto("https://www.handelsregister.de/rp_web/welcome.xhtml", wait_until="domcontentloaded")
     if debug:
         print("[debug] opened welcome page:", page.url)
 
-async def perform_search(keyword: str, mode: str, register_number: str = None, postal_code: str = None, postal_code_option=False, debug=False):
+async def perform_search(keyword: str, mode: str, register_number: str = None, postal_code: str = None, postal_code_option=False):
     """
     Click 'Advanced search', fill the form, submit.
     """
-    # The site has a link/button with text like "Advanced search" (English UI).
-    # On German UI it may be "Erweiterte Suche". We try both.
-    # Prefer a robust selector by partial text.
-    # Open Advanced Search (prefer fixed ID; keep fallbacks)
     global page
     global counter
-    clicked = False
+    global debug
+    #Click advanced search
     try:
-        await page.click("#naviForm\\:erweiterteSucheLink", timeout=10000)
-        clicked = True
-    except Exception:
-        # fallbacks by text (en/de)
-        advanced_candidates = [
-            page.get_by_role("link", name="Advanced search"),
-            page.get_by_role("link", name="Erweiterte Suche"),
-            page.locator("a:has-text('Advanced search')"),
-            page.locator("a:has-text('Erweiterte Suche')"),
-        ]
-        for loc in advanced_candidates:
-            try:
-                await loc.first.click(timeout=2000)
-                clicked = True
-                break
-            except Exception:
-                pass
-
-    if not clicked:
+        await page.click("#naviForm\\:erweiterteSucheLink", timeout=30000)
+    except PwTimeoutError:
         print("[warn] Could not open Advanced search. UI may have changed.")
-        print("[warn] Rerun")
-        page = await page.context.new_page()  # Reset page context
-        await open_startpage(debug=debug)
-        await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option, debug=debug)
+        await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
         return
 
     # Wait for the form to be present (use a field we know)
     try:
-        await page.wait_for_selector("#form\\:schlagwoerter", timeout=10000)
+        await page.wait_for_selector("#form\\:schlagwoerter", timeout=30000)
     except PwTimeoutError:
         print("[warn] Advanced search form not found; UI may have changed.")
-        print("[warn] Rerun")
-        page = await page.context.new_page()  # Reset page context
-        await open_startpage(debug=debug)
-        await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option, debug=debug)
+        await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
         return
 
     # Form fields (JSF IDs usually 'form:schlagwoerter' and 'form:schlagwortOptionen')
@@ -168,11 +150,8 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
         keyword = first_five  # Limit to first 5 words for search
         await page.fill("#form\\:schlagwoerter", keyword)
     except Exception:
-        print("[warn] Could not fill 'schlagwoerter' by ID")
-        print("[warn] Rerun")
-        page = await page.context.new_page()  # Reset page context
-        await open_startpage(debug=debug)
-        await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option, debug=debug)
+        print("[warn] Could not fill 'schlagwoerter' by ID, UI may have changed.")
+        await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
         return
 
     # Print outerHTML
@@ -186,11 +165,8 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
             register_number = ""
         await page.fill("#form\\:registerNummer", register_number)
     except Exception:
-        print("[warn] Could not fill 'registerNummer' by ID")
-        print("[warn] Rerun")
-        page = await page.context.new_page()  # Reset page context
-        await open_startpage(debug=debug)
-        await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option, debug=debug)
+        print("[warn] Could not fill 'registerNummer' by ID, UI may have changed.")
+        await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
         return
 
         #Print outerHTML
@@ -203,14 +179,9 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
             if postal_code is None:
                 postal_code = ""
             await page.fill("#form\\:postleitzahl", postal_code)
-            if debug:
-                print("[debug] postal code:", postal_code)
         except Exception:
-            print("[warn] Could not fill 'postleitzahl' by ID")
-            print("[warn] Rerun")
-            page = await page.context.new_page()  # Reset page context
-            await open_startpage(debug=debug)
-            await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option, debug=debug)
+            print("[warn] Could not fill 'postleitzahl' by ID, UI may have changed.")
+            await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
             return
 
 
@@ -223,14 +194,11 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
 
     # Submit the form by clicking the search button (works even if only registerNummer is filled)
     try:
-        await page.click("#form\\:btnSuche", timeout=15000) # ID for the search button
+        await page.click("#form\\:btnSuche", timeout=30000) # ID for the search button
     except Exception:
         # Fallback by button label
-        print("[warn] Could not find search button by ID; trying by role.")
-        print("[warn] Rerun")
-        page = await page.context.new_page()  # Reset page context
-        await open_startpage(debug=debug)
-        await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option, debug=debug)
+        print("[warn] Could not find search button by ID; UI may have changed.")
+        await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
         return
 
 
@@ -242,25 +210,22 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
     try:
         await page.locator(
             "#ergebnissForm\\:selectedSuchErgebnisFormTable_data"
-        ).first.wait_for(timeout=20000)
+        ).first.wait_for(timeout=30000)
     except PwTimeoutError:
         print("[warn] Results table not found; UI may have changed.")
-        print("[warn] Rerun")
-        page = await page.context.new_page()  # Reset page context
-        await open_startpage(debug=debug)
-        await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option, debug=debug)
+        await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
         return
-    #time.sleep(1) # Small pause to ensure results are loaded
 
     if debug:
         #await _debug_dump_results(page)
-        print("[debug] results page:", page.url)
+        print("[debug] results page loaded!")
 
-async def get_results(debug=False):
+async def get_results():
     """
     Scrape the visible rows of the results table (first page).
     Returns list of dicts with minimal fields, and row locators for clicking AD per row.
     """
+    global debug
     rows = page.locator("table[role='grid'] tr[data-ri]")  # JSF data row index attribute
     count = await rows.count()
     results = []
@@ -338,7 +303,7 @@ def replace_umlauts(text):
         text = text.replace(umlaut, replacement)
     return text
 
-async def download_ad_for_row(row_locator, company_name, outdir, sap_number=None, debug=False):
+async def download_ad_for_row(company_name, outdir, sap_number=None, row_locator=None):
     """
     Waits for the single search result, clicks the AD link, and saves the PDF as
     '<Company>_dd.mm.yyyy.pdf'. Returns the saved path or None on failure.
@@ -347,37 +312,26 @@ async def download_ad_for_row(row_locator, company_name, outdir, sap_number=None
     #TODO: if more than one row is found, iterate over them, use row_locator
     #Uppercase and replace umlauts in company name
     global page
+    global debug
     try:
         #Check if the outdir exists, if not create it
         os.makedirs(outdir, exist_ok=True)
 
-
-        tbody = page.locator("#ergebnisForm\\:selectedSuchErgebnisFormTable_data")
-
-
         # Most specific & stable selector for AD (per your HTML)
-        ad_link = page.locator("#ergebnissForm\\:selectedSuchErgebnisFormTable_data a[onclick*='Global.Dokumentart.AD']")
-        try:
-            await ad_link.first.wait_for(state="attached", timeout=2000)
-            await ad_link.first.scroll_into_view_if_needed()
-        except PwTimeoutError:
-            print(f"[warn] Timeout waiting for visibility: '{company_name}'.")
-            return None
-
         # Trigger and capture the download
         try:
-            async with page.expect_download(timeout=25000) as dl_info:
+            ad_link = page.locator("#ergebnissForm\\:selectedSuchErgebnisFormTable_data a[onclick*='Global.Dokumentart.AD']")
+            async with page.expect_download(timeout=40000) as dl_info:
                 await ad_link.click()
             download = await dl_info.value
             if debug:
                 print(f"[debug] Download started for '{company_name}': {download.suggested_filename}")
         except Exception:
-
-            check_file = os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
-            with open(check_file, "a") as f:
-                f.write(f"\n\n[warn] Failed to click AD link for '{company_name}'; download may not have started. (SAP={sap_number or 'None'})")
-            if debug:
-                print(f"[warn] Failed to click AD link for '{company_name}'; download may not have started.")
+            #check_file = os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
+            #with open(check_file, "a") as f:
+            #    f.write(f"\n\n[warn] Failed to click AD link for '{company_name}'; download may not have started. (SAP={sap_number or 'None'})")
+            print(f"[warn] Failed to click AD link for '{company_name}'; download may not have started.")
+            #todo
             return None
 
         # sap_company_dd.mm.yyyy filename
@@ -418,9 +372,12 @@ async def main_async(args):
           - Downloading 'AD' PDF documents if requested
           - Logging cases where results are ambiguous
     """
-    # Ensure output dir
     global page
     global counter
+    global debug
+
+    debug = args.debug
+    # Ensure output directory exists
     if not os.path.exists(args.outdir):
         default_path = os.path.join(os.path.expanduser("~"), "Downloads", "BP")
         print(f"[warn] Path not found: {args.outdir}")
@@ -436,7 +393,7 @@ async def main_async(args):
         context = await browser.new_context(accept_downloads=True, locale="en-GB")
         page = await context.new_page()
 
-        await open_startpage(debug=args.debug)
+        await open_startpage()
 
 
 
@@ -452,6 +409,7 @@ async def main_async(args):
                 sap_supplier_col=args.sap_supplier_col,
                 sap_customer_col=args.sap_customer_col,
                 postal_code_col=args.postal_code_check_col,
+                country_col=args.country_col,
                 start=args.start,
                 end=args.end,
             )
@@ -461,6 +419,10 @@ async def main_async(args):
             start_time = time.time() # 1 hour timer to not go over the 60 search limitation (VERY IMPORTANT)
             # Iterate through each job (company) from the Excel list
             for i, job in enumerate(jobs, 1):
+                # TODO: Other countries
+                if job["country"] != "DE":
+                    print(f"[warn] Skipping job {i}: country is not DE (got '{job['country']}').")
+                    continue
                 # Timer logic: every 60 jobs, wait for the remaining time to complete the hour
                 if counter >= 60:
                     elapsed_time = time.time() - start_time
@@ -476,7 +438,7 @@ async def main_async(args):
                     start_time = time.time()
                     print("[info] Hour timer reset")
                     page = await context.new_page()  # Reset page context
-                    await open_startpage(debug=args.debug)
+                    await open_startpage()
 
 
                 if job["name"] is None:
@@ -488,19 +450,19 @@ async def main_async(args):
                 sap = job["sap"]  # SAP number (if available)
                 postal_code = job["postal_code"]  # Postal code (if available)
 
-                if args.debug:
+                if debug:
                     print("")
                     print(f"[debug] ({i}/{len(jobs)}) {sap or 'NoSAP'} | {kw} | reg={reg or 'None'}")
 
                 # Refresh the start page for each job (avoids leftover form state) TODO: check if this is needed
-                #await open_startpage(page, debug=args.debug)
+                #await open_startpage(page, debug=debug)
 
                 # Perform the advanced search with the name + optional register number
-                await perform_search(kw, args.schlagwortOptionen, register_number=reg, postal_code=postal_code, postal_code_option=args.postal, debug=args.debug)
+                await perform_search(kw, args.schlagwortOptionen, register_number=reg, postal_code=postal_code, postal_code_option=args.postal)
                 print(f"[debug] {kw} | reg={reg or 'None'}")
 
                 # Retrieve the search results (list of rows)
-                results = await get_results(debug=args.debug)
+                results = await get_results()
 
                 # If we don't have exactly one match, log it to HumanCheck.txt and skip
                 check_file = os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
@@ -513,6 +475,8 @@ async def main_async(args):
                         sheet=args.sheet,
                         row=i + args.start - 1,  # Adjust for 0-based index
                         changes_check_col=args.changes_check_col,
+                        error_col=args.name1_col,
+                        error_msg=f"{len(results)}"
                     )
                     print(
                         f"[warn] Failed '{kw}' (SAP={sap or 'None'}); marked row {i + args.start - 1} in Excel as error.")
@@ -524,11 +488,10 @@ async def main_async(args):
                 company_name = replace_umlauts(r["name"].upper()) # Uppercase and replace umlauts
                 if args.download_ad:
                     path = await download_ad_for_row(
-                        row_locator=r["row_locator"],
                         company_name=company_name,
                         outdir=args.outdir,
                         sap_number=sap,  # Prefix SAP number to the filename if available
-                        debug=args.debug,
+                        row_locator=r["row_locator"], #currently not used
                     )
 
                 if path is not None:
@@ -541,6 +504,8 @@ async def main_async(args):
                             sheet=args.sheet,
                             row=i + args.start - 1,  # Adjust for 0-based index
                             changes_check_col=args.changes_check_col,
+                            error_col=args.name1_col,
+                            error_msg=f"unexpected PDF Format",
                             pdf_path = path,  # Save the path of PDF in excel
                             pdf_path_col=args.doc_path_col,
                         )
@@ -585,8 +550,8 @@ async def main_async(args):
             if args.row_number == "-1":
                 print("In single-shot mode you must provide --row_number.")
                 return
-            await perform_search(args.schlagwoerter, args.schlagwortOptionen, register_number=args.register_number, debug=args.debug)
-            results = await get_results(debug=args.debug)
+            await perform_search(args.schlagwoerter, args.schlagwortOptionen, register_number=args.register_number)
+            results = await get_results()
             if len(results) != 1:
                 # Write to HumanCheck.txt in Downloads
                 check_file = os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
@@ -608,11 +573,10 @@ async def main_async(args):
                 # Process each row and click AD
                 for r in results:
                     path = await download_ad_for_row(
-                        row_locator=r["row_locator"],
                         company_name=r["name"] or "company",
                         outdir=args.outdir,
                         sap_number=args.sap_number, # No SAP number in this case TODO
-                        debug=args.debug,
+                        row_locator=r["row_locator"], #currently not used
                     )
                     # Small pause to be gentle (adjust if needed)
                     #await page.wait_for_timeout(1200)
@@ -626,6 +590,8 @@ async def main_async(args):
                             sheet=args.sheet,
                             row=args.row_number,
                             changes_check_col=args.changes_check_col,
+                            error_col=args.name1_col,
+                            error_msg=f"unexpected PDF Format",
                             pdf_path = path,  # Save the path of PDF in excel
                             pdf_path_col=args.doc_path_col,
                         )
@@ -663,6 +629,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="A handelsregister CLI (Playwright)")
     parser.add_argument(
         "-d", "--debug",
+        default=False,
         help="Enable debug-style prints",
         action="store_true"
     )
@@ -689,6 +656,7 @@ def parse_args():
     )
     parser.add_argument(
         "--download-ad",
+        default=False,
         help="Download the AD (Current hard copy printout) PDF for each result row.",
         action="store_true",
     )
@@ -723,9 +691,10 @@ def parse_args():
     parser.add_argument("--excel", help="Path to Excel file (e.g., TestBP.xlsx)")
     parser.add_argument("--sheet", default=None, help="Optional sheet name")
     parser.add_argument("--name-col", default="C", help="Excel column with Name1 (default C)")
-    parser.add_argument("--regno-col", default="AF", help="Excel column with register number (default AF)")
+    parser.add_argument("--regno-col", default="U", help="Excel column with register number (default AF)")
     parser.add_argument("--sap-supplier-col", default="A", help="Excel column with supplier SAP no. (default A)")
     parser.add_argument("--sap-customer-col", default="B", help="Excel column with customer SAP no. (default B)")
+    parser.add_argument("--country-col", default="J", help="Excel column with Country (default J)")
 
     # excel columns need to be changed, only for change not for extraction
     parser.add_argument("--name1-col", default="T", help="Excel column with Name1 (default T)")
@@ -738,8 +707,8 @@ def parse_args():
     parser.add_argument("--doc-path-col", default="P", help="Excel column with document stored (default P)")
     parser.add_argument("--changes-check-col", default="Q", help="Excel column with Changes necessary (default Q)")
     parser.add_argument("--date-check-col", default="S", help="Excel column with Date of last check (default S)")
-    parser.add_argument("--register-type-col", default="AG", help="Excel column with Register type (default AG)")
-    #parser.add_argument("--country-col", default="AB", help="Excel column with Country (default AB)")
+    parser.add_argument("--register-type-col", default="V", help="Excel column with Register type (default AG)")
+
 
 
     parser.add_argument(

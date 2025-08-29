@@ -13,11 +13,12 @@ from playwright.async_api import async_playwright, TimeoutError as PwTimeoutErro
 
 
 def write_to_excel_error(
-        path, sheet, row, changes_check_col, pdf_path=None, pdf_path_col=None):
+        path, sheet, row, changes_check_col, error_col, error_msg , pdf_path=None, pdf_path_col=None):
     wb = load_workbook(path)
     ws = wb[sheet] if sheet else wb.active
 
     ws[f"{changes_check_col}{row}"] = "yes"
+    ws[f"{error_col}{row}"] = error_msg
     if pdf_path:
         ws[f"{pdf_path_col}{row}"] = pdf_path
     wb.save(path)
@@ -120,9 +121,9 @@ def col_letter_to_idx(letter: str) -> int:
     return idx - 1  # Convert from 1-based to 0-based index
 
 
-def read_jobs_from_excel(path: str, sheet: str | None, name_col: str, regno_col: str | None,
-                         sap_supplier_col: str | None, sap_customer_col: str | None, postal_code_col: str | None, start: int | None,
-                         end: int | None):
+def read_jobs_from_excel(path, sheet, name_col, regno_col,
+                         sap_supplier_col, sap_customer_col, postal_code_col, country_col, start,
+                         end):
     """
     Read company data from an Excel file and return a list of jobs to process.
 
@@ -177,6 +178,7 @@ def read_jobs_from_excel(path: str, sheet: str | None, name_col: str, regno_col:
         sap_supplier = safe_get(row, sap_supplier_col)
         sap_customer = safe_get(row, sap_customer_col) if sap_customer_col else None
         postal_code = safe_get(row, postal_code_col)
+        country = safe_get(row, country_col)
 
         # Prefer supplier SAP, else customer SAP, else None
         sap_raw = sap_supplier if sap_supplier not in (None, "") else sap_customer
@@ -198,6 +200,7 @@ def read_jobs_from_excel(path: str, sheet: str | None, name_col: str, regno_col:
             "register_no": register_no,
             "sap": sap,
             "postal_code": str(postal_code).strip() if postal_code not in (None, "") else None,
+            "country": str(country).strip() if country not in (None, "") else None,
         })
 
     return jobs

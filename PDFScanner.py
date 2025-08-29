@@ -115,7 +115,8 @@ def extract_from_text(text: str) -> dict:
         # take this line; strip any trailing artifacts
         company = m.group(1).strip()
     else:
-        return {"register_type": "unexpected Format"}
+        # likely the second format
+        return extract_from_text_2nd_format(text)
 
     # 3) Address (after "Geschäftsanschrift:")
     address = ""
@@ -126,7 +127,7 @@ def extract_from_text(text: str) -> dict:
         # Sometimes address line ends with a page artifact; trim trailing section markers
         address = re.sub(r"\s*(?:\n|$)", "", address)
     else:
-        return {"register_type": "unexpected Format"}
+        return extract_from_text_2nd_format(text)
     addr = replace_umlauts(address.upper())
     addr_parts = split_german_address(addr)
     return {
@@ -135,6 +136,88 @@ def extract_from_text(text: str) -> dict:
         "company_name": company,         # from 2.a) Firma:
         "address": addr,              # from 2.b) after Geschäftsanschrift:
     } | addr_parts  # merge address parts into the dict
+
+def extract_from_text_2nd_format(text: str) -> dict:
+    """
+    Extract fields from Vereinsregister PDFs like:
+
+    Ausdruck - Vereinsregister - VR 601 SE
+    Aktueller Ausdruck VR 601 SE
+    ...
+    2.a) Name des Vereins
+    <name lines...>
+    b) Sitz des Vereins
+    <city>
+    <street house, plz city>
+    """
+    t = normalize_text(text)
+    lines = [ln.strip() for ln in t.split("\n")]
+
+    # 1) Register type & number (from 'Aktueller Ausdruck <TYPE> <NUMBER...>')
+    line3 = lines[3]
+    print(f"Line 4 Format 2: {line3}")  # Debugging output
+    words = line3.split()
+    if int(words[-2]):
+        # sometimes register number is two words, e.g. "VR 601 SE" -> reg = "601 SE"
+        w_type_raw = words[-3]
+        w_num_raw = words[-2] + " " + words[-1]
+    else:
+        w_type_raw, w_num_raw = words[-2], words[-1]
+    reg_type = re.sub(r"[^A-Za-zÄÖÜäöü]", "", w_type_raw).upper()
+    reg_number = w_num_raw
+
+
+    # 2) Company name: lines after "2.a)" up to "b)"
+    company = ""
+    idx_a = None
+    for i, ln in enumerate(lines):
+        if re.search(r"^\s*2\.\s*a\)", ln, flags=re.IGNORECASE):
+            idx_a = i
+            break
+    if idx_a is not None:
+        collected = []
+        for ln in lines[idx_a+1:]:
+            if re.search(r"^\s*(?:2\.\s*)?b\)", ln, flags=re.IGNORECASE):
+                break
+            if ln:
+                collected.append(ln)
+        company = " ".join(collected)
+    else:
+        return {reg_type: "unexpected Format"}
+
+    # 3) Address: section 2.b) — take the “third row” pattern, or only the city (if no street, i.e Vereine often don't have one)
+    address = ""
+    idx_b = None
+    for i, ln in enumerate(lines):
+        if re.search(r"^\s*(?:2\.\s*)?b\)\s*", ln, flags=re.IGNORECASE):
+            idx_b = i
+            break
+    if idx_b is not None:
+        if re.search(r"^\s*3\.", lines[idx_b+2], flags=re.IGNORECASE):
+            # only city
+            city = lines[idx_b + 1].strip()
+            return {
+                "register_type": reg_type,
+                "register_number": reg_number,
+                "company_name": company,
+                "city": city,
+            }
+        else:
+            address = lines[idx_b+2].strip()
+    else:
+        return {reg_type: "unexpected Format"}
+
+
+    parts = split_german_address(replace_umlauts(address.upper()))
+
+    return {
+        "register_type": reg_type,
+        "register_number": reg_number,
+        "company_name": company,
+        "address": address,
+        **parts,
+    }
+
 
 def extract_from_pdf(pdf_path: Path) -> dict:
     """

@@ -6,14 +6,22 @@ wie oft wiederholen bis abbrechen -> 3
 
 blatt sieht anders aus
 
+wo speichern das pdf -> momentan noch alles lokal, wie benennen
+
 errors ad download
 
-different format
+different format -> fix
+
+increase time download open etc
+print message at beginning
 
 
 Different country
 
 
 no reach wait for a bit before trying again
+
+
+timer logic nochmal machen
 
 
