@@ -331,7 +331,6 @@ async def download_ad_for_row(company_name, outdir, sap_number=None, row_locator
             #with open(check_file, "a") as f:
             #    f.write(f"\n\n[warn] Failed to click AD link for '{company_name}'; download may not have started. (SAP={sap_number or 'None'})")
             print(f"[warn] Failed to click AD link for '{company_name}'; download may not have started.")
-            #todo
             return None
 
         # sap_company_dd.mm.yyyy filename
@@ -346,10 +345,6 @@ async def download_ad_for_row(company_name, outdir, sap_number=None, row_locator
             if debug:
                 print(f"[debug] Saved AD PDF: {save_path}")
             return save_path
-        else:
-            if debug:
-                print(f"[warn] PDF download failed or file empty: {save_path}")
-            return None
 
     except Exception as e:
         if debug:
@@ -393,6 +388,8 @@ async def main_async(args):
         context = await browser.new_context(accept_downloads=True, locale="en-GB")
         page = await context.new_page()
 
+        if debug:
+            print("[debug] Browser launched, opening start page...")
         await open_startpage()
 
 
@@ -423,6 +420,7 @@ async def main_async(args):
                 if job["country"] != "DE":
                     print(f"[warn] Skipping job {i}: country is not DE (got '{job['country']}').")
                     continue
+
                 # Timer logic: every 60 jobs, wait for the remaining time to complete the hour
                 if counter >= 60:
                     elapsed_time = time.time() - start_time
@@ -445,6 +443,7 @@ async def main_async(args):
                     print(f"[warn] Skipping job {i}: no company name provided.")
 
                     continue
+
                 kw = job["name"]  # Company name to search for
                 reg = str(job["register_no"]) if job["register_no"] is not None else ""  # Register number (if available), normalized if it was in float
                 sap = job["sap"]  # SAP number (if available)
@@ -483,7 +482,6 @@ async def main_async(args):
                     continue  # Skip to next company
 
                 # If PDF download is enabled, download the AD (Current hard copy printout)
-                path = None
                 r = results[0]  # The single matching result TODO: Multiple if needed
                 company_name = replace_umlauts(r["name"].upper()) # Uppercase and replace umlauts
                 if args.download_ad:
@@ -493,8 +491,9 @@ async def main_async(args):
                         sap_number=sap,  # Prefix SAP number to the filename if available
                         row_locator=r["row_locator"], #currently not used
                     )
+                    while path is None:
+                        path = await rerun_search(kw, args.schlagwortOptionen, register_number=reg, postal_code=postal_code, postal_code_option=args.postal, download=True, company_name=company_name, sap_number=sap, outdir=args.outdir)
 
-                if path is not None:
                     update_info = PDFScanner.extract_from_pdf(path) | {"company_name": company_name, "sap_number": sap, "download_path": path} # Extract fields from the downloaded PDF into a dict, override company_name with umlauts replaced
                     if update_info["register_type"] == "unexpected Format":
                         f.write(f"[warn] Error, unexpected PDF Format '{company_name}' (SAP={sap or 'None'}) in row {i + args.start - 1}")
@@ -532,11 +531,6 @@ async def main_async(args):
                         check_file=os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
                     )
                     print(f"[info] Updated Excel row {i + args.start - 1} for '{company_name}' (SAP={sap or 'None'})")
-
-
-                
-                # Small pause to avoid sending requests too quickly
-                await page.wait_for_timeout(1000)
 
         
         #TODO: Single-shot mode

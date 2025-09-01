@@ -101,7 +101,6 @@ def extract_from_text(text: str) -> dict:
     # 1) Register type + number (2nd line last 2 words)
     lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
     line2 = lines[1]
-    print(f"Line 2: {line2}")  # Debugging output
     words = line2.split()
     w_type_raw, w_num_raw = words[-2], words[-1]
     reg_type = re.sub(r"[^A-Za-zÄÖÜäöü]", "", w_type_raw).upper()
