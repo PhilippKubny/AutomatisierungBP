@@ -95,7 +95,7 @@ def write_update_to_excel(
 
     # Write an actual Excel date (keeps number format)
     cell = ws[f"{date_check_col}{row}"]
-    cell.value = date.today().strftime("%d-%m-%Y")
+    cell.value = date.today().strftime("%d.%m.%Y")
 
     wb.save(path)
     wb.close()

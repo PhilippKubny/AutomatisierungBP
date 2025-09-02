@@ -129,7 +129,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
     try:
         await page.click("#naviForm\\:erweiterteSucheLink", timeout=30000)
     except PwTimeoutError:
-        print("[warn] Could not open Advanced search. UI may have changed.")
+        print("[warn] Could not open Advanced search. Website not reachable or UI may have changed.")
         await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
         return
 
@@ -137,7 +137,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
     try:
         await page.wait_for_selector("#form\\:schlagwoerter", timeout=30000)
     except PwTimeoutError:
-        print("[warn] Advanced search form not found; UI may have changed.")
+        print("[warn] Advanced search form not found; Website not reachable or UI may have changed.")
         await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
         return
 
@@ -150,7 +150,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
         keyword = first_five  # Limit to first 5 words for search
         await page.fill("#form\\:schlagwoerter", keyword)
     except Exception:
-        print("[warn] Could not fill 'schlagwoerter' by ID, UI may have changed.")
+        print("[warn] Could not fill 'schlagwoerter' by ID, Website not reachable or UI may have changed.")
         await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
         return
 
@@ -165,7 +165,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
             register_number = ""
         await page.fill("#form\\:registerNummer", register_number)
     except Exception:
-        print("[warn] Could not fill 'registerNummer' by ID, UI may have changed.")
+        print("[warn] Could not fill 'registerNummer' by ID, Website not reachable or UI may have changed.")
         await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
         return
 
@@ -180,7 +180,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
                 postal_code = ""
             await page.fill("#form\\:postleitzahl", postal_code)
         except Exception:
-            print("[warn] Could not fill 'postleitzahl' by ID, UI may have changed.")
+            print("[warn] Could not fill 'postleitzahl' by ID, Website not reachable or UI may have changed.")
             await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
             return
 
@@ -197,7 +197,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
         await page.click("#form\\:btnSuche", timeout=30000) # ID for the search button
     except Exception:
         # Fallback by button label
-        print("[warn] Could not find search button by ID; UI may have changed.")
+        print("[warn] Could not find search button by ID; Website not reachable or UI may have changed.")
         await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
         return
 
@@ -212,7 +212,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
             "#ergebnissForm\\:selectedSuchErgebnisFormTable_data"
         ).first.wait_for(timeout=30000)
     except PwTimeoutError:
-        print("[warn] Results table not found; UI may have changed.")
+        print("[warn] Results table not found; Website not reachable or UI may have changed.")
         await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
         return
 
