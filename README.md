@@ -1,3 +1,71 @@
+Idee: 
+	We imitate a human who's doing everything by hand. There is no API for handelsregister.de at this moment.
+ 	In the following you can see the startpage of the website https://www.handelsregister.de/rp_web/welcome.xhtml. On there we click on the 'Advanced Search option' on the right side. 
+	<img width="1552" height="815" alt="image" src="https://github.com/user-attachments/assets/bf638fee-9e7c-4694-a3c7-42b1c53af508" />
+ 	
+  After clicking we'll get the search form:
+  	<img width="1888" height="879" alt="image" src="https://github.com/user-attachments/assets/187c6a1d-77c1-4d06-90b7-793d9c721757" /><img width="1368" height="870" alt="image" src="https://github.com/user-attachments/assets/b223b4f7-c043-48a7-97fe-c69798511366" />
+	Depending on how you run the python script (more explained below, i.e -excel, -registernumber, -postal etc.) the respective fields will be filled. Mandatory to fill is the "Company or keywords" field. 
+ Other than that, the script also allows to fill the "register number" and "postal code" field. In theory you could also change the "Search for records that" field by modifying the -mode parameter (I wouldn't recommend using it though, because the functions don't seem to be implemented very well on the website)
+
+Lets try running a search (i.e Schwille Elektronik Produktions- und Vertriebs GmbH). After clicking on the "Find" button a list of Matching results will show up:
+<img width="1891" height="925" alt="image" src="https://github.com/user-attachments/assets/0fa0d58d-37c5-4bf5-a477-fa0cf77f4233" />
+
+
+ If the company name combined with the optional parameters is unique we will only receive one result (will always be unique if we have the register number of the company). The python programm will only handle unique results.
+ If there are multiple results it will be logged in the column "name1-4" (column 'T') how many results where found. 0 means there was no matching comany (either the company name was misspelled or is not registered in the handelsregister).
+
+If the result is unique the script will download the AD file and save it to the BP folder in Downloads with the following format <internalSAPNumber_ComapanyName_DateOfDownload>:
+<img width="516" height="322" alt="image" src="https://github.com/user-attachments/assets/dffa6cf2-ce8c-4564-a8f0-d6190b53115d" />
+
+There are 2 types of AD files in the Handelsregister:
+<img width="1188" height="901" alt="image" src="https://github.com/user-attachments/assets/e90d0952-e1b1-48ff-8794-c20756a89cda" /><img width="1128" height="895" alt="image" src="https://github.com/user-attachments/assets/0cc079eb-5b0c-4590-8d69-6dbf310e7a3d" />
+
+Depending on which format was used the script will perform a PDF scan to extract all the relevant information (Company name, register number, address). 
+If the AD file had an unexpected format it will show error in the excel column "name1-4"/'T' "Unexpected format"
+
+If everything worked it will write back all the information that was exctracted back to the excel file and continune with the next row. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 Ignore -schlagwortOptionen (don't need)
 
 excel.py has everything to do with excel. Extracting information and writing back information. 
@@ -41,5 +109,6 @@ PlayHandelsregister.py is the main that automates everything. First, it's inputt
    -sap is the number we give internally in MTU can be read of the excel sheet
    
    -row correlates to the companies row in the excel sheet (so that the information can be updated in the excel sheet)
+
 
 
