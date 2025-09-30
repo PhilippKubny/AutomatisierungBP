@@ -25,13 +25,41 @@ from openpyxl import load_workbook
 import exel
 import PDFScanner
 
-from playwright.async_api import async_playwright, TimeoutError as PwTimeoutError
+from playwright.async_api import async_playwright, TimeoutError as PWTimeoutError
 
 
 page = None  # Global page object for async context
 counter = 0 #for timer logic
 reruns = 0 #for reruns logic
 debug = False
+
+
+async def goto_with_retry(page, url: str, attempts: int = 3, base_timeout_ms: int = 60000):
+    last_err = None
+    for i in range(1, attempts + 1):
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=base_timeout_ms)
+            try:
+                await page.get_by_role(
+                    "button",
+                    name=re.compile(r"(Alle\s+akzeptieren|Akzeptieren|Zustimmen)", re.I),
+                ).click(timeout=3000)
+            except Exception:
+                pass
+            try:
+                await page.wait_for_selector("text=Erweiterte Suche", timeout=10000)
+            except PWTimeoutError:
+                await page.wait_for_selector("input[type='text']", timeout=5000)
+            return
+        except Exception as e:
+            last_err = e
+            await asyncio.sleep(1.5 * i)
+    raise last_err
+
+
+def apply_page_timeouts(target_page) -> None:
+    target_page.set_default_navigation_timeout(90000)
+    target_page.set_default_timeout(45000)
 
 # Map to existing CLI semantics
 SCHLAGWORT_OPTIONEN = {
@@ -126,6 +154,7 @@ async def rerun_search(keyword: str, mode: str, register_number: str = None, pos
         reruns = 0
     print("[warn] Rerun")
     page = await page.context.new_page()  # Reset page context
+    apply_page_timeouts(page)
     await open_startpage()
     await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code)
     if download:
@@ -140,7 +169,12 @@ async def open_startpage():
     # Landing page → ensure we land on welcome.xhtml
     global page
     global debug
-    await page.goto("https://www.handelsregister.de/rp_web/welcome.xhtml", wait_until="domcontentloaded")
+    await goto_with_retry(
+        page,
+        "https://www.handelsregister.de/rp_web/welcome.xhtml",
+        attempts=4,
+        base_timeout_ms=90000,
+    )
     if debug:
         print("[debug] opened welcome page:", page.url)
 
@@ -150,6 +184,22 @@ async def ensure_advanced_search():
     global page
     global debug
     label = re.compile(r"Erweiterte Suche", re.I)
+    try:
+        await page.get_by_role("link", name=label).click(timeout=5000)
+        if debug:
+            print("[debug] Activated advanced search via link role.")
+        return
+    except Exception:
+        pass
+
+    try:
+        await page.get_by_role("button", name=label).click(timeout=5000)
+        if debug:
+            print("[debug] Activated advanced search via button role.")
+        return
+    except Exception:
+        pass
+
     candidates = [
         ("link", page.get_by_role("link", name=label)),
         ("button", page.get_by_role("button", name=label)),
@@ -184,7 +234,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
     # Wait for the form to be present (use a field we know)
     try:
         await page.wait_for_selector("#form\\:schlagwoerter", timeout=30000)
-    except PwTimeoutError:
+    except PWTimeoutError:
         print("[warn] Advanced search form not found; Website not reachable or UI may have changed.")
         await rerun_search(keyword, mode, register_number, postal_code)
         return
@@ -227,11 +277,11 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
         try:
             field = page.get_by_label(label_regex)
             if await field.count():
-                await field.first.fill(postal_code_value)
+                await field.first.fill(postal_code_value, timeout=4000)
                 print(f"[info] Postal code '{postal_code_value}' filled via label locator.")
             else:
                 fallback = page.locator("#form\\:postleitzahl")
-                await fallback.fill(postal_code_value)
+                await fallback.fill(postal_code_value, timeout=4000)
                 print(f"[info] Postal code '{postal_code_value}' filled via fallback ID locator.")
         except Exception as exc:
             print(f"[warn] Could not set postal code '{postal_code_value}': {exc}")
@@ -266,7 +316,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
         await page.locator(
             "#ergebnissForm\\:selectedSuchErgebnisFormTable_data"
         ).first.wait_for(timeout=30000)
-    except PwTimeoutError:
+    except PWTimeoutError:
         print("[warn] Results table not found; Website not reachable or UI may have changed.")
         await rerun_search(keyword, mode, register_number, postal_code)
         return
@@ -463,10 +513,24 @@ async def main_async(args):
         os.makedirs(args.outdir, exist_ok=True)
 
     async with async_playwright() as p:
-        # Headless Chromium; accept downloads in the context
-        browser = await p.chromium.launch(headless=not args.headful)
-        context = await browser.new_context(accept_downloads=True, locale="en-GB")
+        browser = await p.chromium.launch(headless=not args.headful, slow_mo=0)
+        context = await browser.new_context(
+            accept_downloads=True,
+            locale="de-DE",
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1366, "height": 768},
+        )
+
+        await context.route(
+            re.compile(r".*\.(png|jpe?g|gif|svg|webp)(\?.*)?$", re.I),
+            lambda request: request.abort(),
+        )
+
         page = await context.new_page()
+        apply_page_timeouts(page)
 
         if debug:
             print("[debug] Browser launched, opening start page...")
@@ -525,6 +589,7 @@ async def main_async(args):
                     start_time = time.time()
                     print("[info] Hour timer reset")
                     page = await context.new_page()  # Reset page context
+                    apply_page_timeouts(page)
                     await open_startpage()
 
 
