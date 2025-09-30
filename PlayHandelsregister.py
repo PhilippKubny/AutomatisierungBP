@@ -17,9 +17,11 @@ import os
 import re
 import time
 import sys
-import pandas as pd
-from string import ascii_uppercase
 from datetime import date
+from typing import Optional
+
+from openpyxl import load_workbook
+
 import exel
 import PDFScanner
 
@@ -37,6 +39,30 @@ SCHLAGWORT_OPTIONEN = {
     "min": 2,    # contain at least one keyword
     "exact": 3,  # exact company name
 }
+
+
+def read_cell(ws, row: int, col_letter: str) -> Optional[str]:
+    """Return the trimmed value of a worksheet cell or ``None`` if empty."""
+    if ws is None or not col_letter:
+        return None
+    cell_ref = f"{col_letter}{row}"
+    try:
+        value = ws[cell_ref].value
+    except Exception as exc:  # pragma: no cover - defensive logging
+        print(f"[warn] Could not read cell {cell_ref}: {exc}")
+        return None
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def looks_like_same_zip(text: Optional[str], plz: Optional[str]) -> bool:
+    """Return ``True`` if *text* contains the exact *plz* as a standalone token."""
+    if not text or not plz:
+        return False
+    pattern = re.compile(rf"\b{re.escape(plz)}\b")
+    return bool(pattern.search(text))
 
 
 # TODO: Debug helper to print element value and outerHTML
@@ -118,6 +144,34 @@ async def open_startpage():
     if debug:
         print("[debug] opened welcome page:", page.url)
 
+
+async def ensure_advanced_search():
+    """Ensure the advanced search form is visible by clicking the corresponding link/button."""
+    global page
+    global debug
+    label = re.compile(r"Erweiterte Suche", re.I)
+    candidates = [
+        ("link", page.get_by_role("link", name=label)),
+        ("button", page.get_by_role("button", name=label)),
+        ("legacy-id", page.locator("#naviForm\\:erweiterteSucheLink")),
+    ]
+    for description, locator in candidates:
+        try:
+            if await locator.count() == 0:
+                continue
+            handle = locator.first
+            if not await handle.is_enabled():
+                continue
+            if not await handle.is_visible():
+                continue
+            await handle.click()
+            if debug:
+                print(f"[debug] Activated advanced search via {description} locator.")
+            break
+        except Exception as exc:
+            print(f"[warn] Could not activate advanced search via {description}: {exc}")
+
+
 async def perform_search(keyword: str, mode: str, register_number: str = None, postal_code: str = None):
     """
     Click 'Advanced search', fill the form, submit.
@@ -125,13 +179,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
     global page
     global counter
     global debug
-    #Click advanced search
-    try:
-        await page.click("#naviForm\\:erweiterteSucheLink", timeout=30000)
-    except PwTimeoutError:
-        print("[warn] Could not open Advanced search. Website not reachable or UI may have changed.")
-        await rerun_search(keyword, mode, register_number, postal_code)
-        return
+    await ensure_advanced_search()
 
     # Wait for the form to be present (use a field we know)
     try:
@@ -173,18 +221,23 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
         #if debug:
             #await _debug_dump_element(page, "#form\\:registerNummer", "registerNummer")
 
-    postal_code_value = ""
-    if postal_code is not None:
-        postal_code_value = str(postal_code).strip()
+    postal_code_value = str(postal_code).strip() if postal_code else ""
     if postal_code_value:
+        label_regex = re.compile(r"(Postleitzahl|PLZ)", re.I)
         try:
-            await page.fill("#form\\:postleitzahl", postal_code_value)
-        except Exception:
-            print("[warn] Could not fill 'postleitzahl' by ID, Website not reachable or UI may have changed.")
-            await rerun_search(keyword, mode, register_number, postal_code)
-            return
+            field = page.get_by_label(label_regex)
+            if await field.count():
+                await field.first.fill(postal_code_value)
+                print(f"[info] Postal code '{postal_code_value}' filled via label locator.")
+            else:
+                fallback = page.locator("#form\\:postleitzahl")
+                await fallback.fill(postal_code_value)
+                print(f"[info] Postal code '{postal_code_value}' filled via fallback ID locator.")
+        except Exception as exc:
+            print(f"[warn] Could not set postal code '{postal_code_value}': {exc}")
     else:
-        print(f"[warn] No postal code provided for '{keyword}'. Continuing search without postal code input.")
+        if debug:
+            print(f"[debug] Postal code filter inactive for '{keyword}'.")
 
 
     # Radio/select for schlagwortOptionen:
@@ -222,7 +275,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
         #await _debug_dump_results(page)
         print("[debug] results page loaded!")
 
-async def get_results():
+async def get_results(postal_code: Optional[str] = None):
     """
     Scrape the visible rows of the results table (first page).
     Returns list of dicts with minimal fields, and row locators for clicking AD per row.
@@ -257,6 +310,22 @@ async def get_results():
         registered_office = texts[3] if len(texts) > 3 else ""
         status = texts[4] if len(texts) > 4 else ""
 
+        address = None
+        address_source = None
+        for selector in (".address", ".ergebnisAdresse", ".result-address"):
+            try:
+                locator = row.locator(selector)
+                if await locator.count():
+                    address = (await locator.first.inner_text()).strip()
+                    address_source = selector
+                    break
+            except Exception:
+                continue
+
+        address = address or registered_office
+        if postal_code and debug and address_source:
+            print(f"[debug] Result row {i} address from {address_source}: {address}")
+
         results.append(
             {
                 "row_index": i,
@@ -264,9 +333,18 @@ async def get_results():
                 "name": name,
                 "registered_office": registered_office,
                 "status": status,
+                "address": address,
                 "row_locator": row,  # keep for AD click
             }
         )
+
+    if postal_code:
+        filtered = [r for r in results if looks_like_same_zip(r.get("address"), postal_code)]
+        dropped = len(results) - len(filtered)
+        if dropped:
+            print(f"[info] Postal code '{postal_code}' filtered out {dropped} result(s).")
+        print(f"[info] Postal code '{postal_code}' left {len(filtered)} of {len(results)} result(s).")
+        return filtered
 
     return results
 
@@ -407,13 +485,22 @@ async def main_async(args):
                 regno_col=args.regno_col,
                 sap_supplier_col=args.sap_supplier_col,
                 sap_customer_col=args.sap_customer_col,
-                postal_code_col=args.postal_code_check_col,
+                postal_code_col=args.postal_code_col,
                 country_col=args.country_col,
                 start=args.start,
                 end=args.end,
             )
 
             print(f"[info] loaded {len(jobs)} jobs from Excel (rows {args.start or 3}..{args.end or 'last'})")
+
+            ws_postal = None
+            wb_postal = None
+            if args.postal_code:
+                try:
+                    wb_postal = load_workbook(args.excel, data_only=True, read_only=True)
+                    ws_postal = wb_postal[args.sheet] if args.sheet else wb_postal.active
+                except Exception as exc:
+                    print(f"[warn] Could not open workbook for postal code lookup: {exc}")
 
             start_time = time.time() # 1 hour timer to not go over the 60 search limitation (VERY IMPORTANT)
             # Iterate through each job (company) from the Excel list
@@ -449,7 +536,17 @@ async def main_async(args):
                 kw = job["name"]  # Company name to search for
                 reg = str(job["register_no"]) if job["register_no"] is not None else ""  # Register number (if available), normalized if it was in float
                 sap = job["sap"]  # SAP number (if available)
-                postal_code = job["postal_code"]  # Postal code (if available)
+                row_number = i + args.start - 1
+                postal_code = None
+                if args.postal_code:
+                    candidate = job.get("postal_code") if isinstance(job, dict) else None
+                    postal_code = str(candidate).strip() if candidate else None
+                    if not postal_code and ws_postal is not None:
+                        postal_code = read_cell(ws_postal, row_number, args.postal_code_col)
+                    if postal_code:
+                        print(f"[info] Using postal code '{postal_code}' for row {row_number}.")
+                    else:
+                        print(f"[info] No postal code for row {row_number}; running search without PLZ filter.")
 
                 if debug:
                     print("")
@@ -463,7 +560,7 @@ async def main_async(args):
                 print(f"[debug] {kw} | reg={reg or 'None'}")
 
                 # Retrieve the search results (list of rows)
-                results = await get_results()
+                results = await get_results(postal_code if args.postal_code else None)
 
                 # If we don't have exactly one match, log it to HumanCheck.txt and skip
                 check_file = os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
@@ -534,7 +631,10 @@ async def main_async(args):
                     )
                     print(f"[info] Updated Excel row {i + args.start - 1} for '{company_name}' (SAP={sap or 'None'})")
 
-        
+            if wb_postal is not None:
+                wb_postal.close()
+
+
         #TODO: Single-shot mode
         else:
             if args.sap_number == "-1":
@@ -546,8 +646,15 @@ async def main_async(args):
             if args.row_number == "-1":
                 print("In single-shot mode you must provide --row_number.")
                 return
-            await perform_search(args.schlagwoerter, args.schlagwortOptionen, register_number=args.register_number, postal_code=args.postal_code)
-            results = await get_results()
+            single_postal_code = None
+            if args.postal_code:
+                single_postal_code = str(args.plz or "").strip() or None
+                if single_postal_code:
+                    print(f"[info] Using postal code '{single_postal_code}' for single-shot search.")
+                else:
+                    print("[info] Postal code flag enabled but no --plz value provided; continuing without filter.")
+            await perform_search(args.schlagwoerter, args.schlagwortOptionen, register_number=args.register_number, postal_code=single_postal_code)
+            results = await get_results(single_postal_code if args.postal_code else None)
             if len(results) != 1:
                 # Write to HumanCheck.txt in Downloads
                 check_file = os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
@@ -621,18 +728,13 @@ async def main_async(args):
         await browser.close()
 
 
-def parse_args():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="A handelsregister CLI (Playwright)")
     parser.add_argument(
         "-d", "--debug",
         default=False,
         help="Enable debug-style prints",
         action="store_true"
-    )
-    parser.add_argument(
-        "--postal-code-check-col",
-        default="I",
-        help="Excel column with Postal Code (default I)"
     )
     parser.add_argument(
         "-s", "--schlagwoerter",
@@ -668,10 +770,10 @@ def parse_args():
     )
     parser.add_argument(
         "--postal-code",
-        help="Optional: Postal code for single-shot searches",
-        default=None,
-        required=False
+        help="Enable postal code filtering for searches.",
+        action="store_true",
     )
+    parser.add_argument("--plz", default="", help="Postal code for single-shot searches (use with --postal-code).")
     parser.add_argument(
         "-sap", "--sap-number",
         default="-1",
@@ -722,7 +824,11 @@ def parse_args():
     )
 
 
-    return parser.parse_args()
+    return parser
+
+
+def parse_args(argv: Optional[list[str]] = None):
+    return build_parser().parse_args(argv)
 
 
 def main():

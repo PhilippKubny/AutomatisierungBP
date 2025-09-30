@@ -107,28 +107,27 @@ python PlayHandelsregister.py \
     --start 3 \
     --end 30 \
     --download-ad \
-    --postal-code
+    --postal-code \
+    --postal-code-col AA
 ```
 Wichtige Hinweise:
 - `--excel` aktiviert den Batch-Modus und ist Pflichtparameter.
 - `--start` und `--end` referenzieren 1-basierte Zeilennummern (inklusive).
 - `--download-ad` löst den PDF-Download aus. Ohne diese Option werden nur Treffer ausgewertet.
-- `--postal-code` verwendet die Postleitzahl aus der Excel-Tabelle zur Suche.
+- `--postal-code` verwendet die Postleitzahl aus der Excel-Tabelle zur Suche; mit `--postal-code-col` kann die Spalte angepasst werden.
 
 ### Single-Shot-Suche
 Für Einzelfälle ohne Excel-Datei:
 ```bash
 python PlayHandelsregister.py \
     -s "THYSSENKRUPP SCHULTE GMBH" \
-    --register-number "26718" \
-    --sap-number "2203241" \
-    --row-number "352" \
     --download-ad \
-    --outdir "~/Downloads/BP"
+    --postal-code \
+    --plz 45128
 ```
 - `-s/--schlagwoerter` ist der Pflicht-Suchbegriff.
-- `--register-number` und `--postal-code` sind optional erhöhen aber die Trefferqualität.
-- `--sap-number` und `--row-number` dienen zur Rückschreibung in Excel (benötigt Excel-Datei im Hintergrund).
+- `--plz` liefert die Postleitzahl für Single-Shot-Suchen, sobald `--postal-code` gesetzt ist.
+- `--register-number`, `--sap-number` und `--row-number` bleiben optional, steigern aber die Treffer- und Rückschreibqualität.
 
 ### Wichtige CLI-Optionen
 - `-d/--debug`: Ausführliche Konsolenausgabe (inkl. HTML-Snippets bei Fehlern)
@@ -136,7 +135,7 @@ python PlayHandelsregister.py \
 - `--download-ad`: Aktiviert PDF-Downloads
 - `--outdir`: Zielverzeichnis für PDF-Dateien
 - `--schlagwortOptionen {all|min|exact}`: Steuerung der Volltextsuche
-- `--postal-code`: Aktiviert die Postleitzahlsuche im Single-Shot-Modus
+- `--postal-code`: Aktiviert die Postleitzahl-Filterung; kombiniert mit `--postal-code-col` (Batch) bzw. `--plz` (Single-Shot)
 
 Eine vollständige Übersicht erhalten Sie mit `python PlayHandelsregister.py --help`.
 

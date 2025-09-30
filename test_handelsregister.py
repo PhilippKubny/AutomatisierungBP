@@ -1,4 +1,7 @@
 import pytest
+
+pytest.importorskip("handelsregister", reason="Legacy module not bundled with this repository")
+
 from handelsregister import get_companies_in_searchresults,HandelsRegister
 import argparse
 
