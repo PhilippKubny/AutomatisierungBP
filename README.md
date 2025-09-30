@@ -3,21 +3,23 @@
 ## Inhaltsverzeichnis
 1. [Projektüberblick](#projektüberblick)
 2. [Funktionen im Überblick](#funktionen-im-überblick)
-3. [Systemvoraussetzungen](#systemvoraussetzungen)
-4. [Installation & Setup](#installation--setup)
+3. [Projektstruktur & Skripte](#projektstruktur--skripte)
+4. [Systemvoraussetzungen](#systemvoraussetzungen)
+5. [Installation & Setup](#installation--setup)
    1. [Repository beziehen](#repository-beziehen)
    2. [Python-Umgebung vorbereiten](#python-umgebung-vorbereiten)
    3. [Playwright-Browser installieren](#playwright-browser-installieren)
-5. [Konfiguration](#konfiguration)
+6. [Konfiguration](#konfiguration)
    1. [Excel-Layout](#excel-layout)
    2. [Download-Verzeichnisse](#download-verzeichnisse)
-6. [Ausführung](#ausführung)
+7. [Ausführung](#ausführung)
    1. [Batch-Modus mit Excel](#batch-modus-mit-excel)
    2. [Single-Shot-Suche](#single-shot-suche)
    3. [Wichtige CLI-Optionen](#wichtige-cli-optionen)
-7. [Troubleshooting & Hinweise](#troubleshooting--hinweise)
-8. [Tests & Qualitätssicherung](#tests--qualitätssicherung)
-9. [Lizenz & Haftungsausschluss](#lizenz--haftungsausschluss)
+   4. [PDF-Nachbearbeitung](#pdf-nachbearbeitung)
+8. [Troubleshooting & Hinweise](#troubleshooting--hinweise)
+9. [Tests & Qualitätssicherung](#tests--qualitätssicherung)
+10. [Lizenz & Haftungsausschluss](#lizenz--haftungsausschluss)
 
 ---
 
@@ -36,6 +38,14 @@ Der Ablauf gliedert sich in drei Hauptschritte:
 - PDF-Parsing (Registerart, Registernummer, Adresse) mittels `pdfplumber`
 - Rückschreiben der Ergebnisse in definierte Excel-Spalten inklusive Änderungskennzeichnung
 - Robuste Wiederholungslogik bei Netz-/UI-Fehlern sowie Debug-Ausgaben
+
+## Projektstruktur & Skripte
+- **`PlayHandelsregister.py`** – Hauptskript für die automatisierte Recherche inklusive Excel-Anbindung und PDF-Download.
+- **`PDFScanner.py`** – CLI-Tool zum nachträglichen Auslesen heruntergeladener PDF-Auszüge (Registerart, Nummer, Anschrift usw.).
+- **`PDFdump.py`** – Hilfsprogramm zur strukturierten Analyse problematischer PDFs (Text- und Byte-Dumps für Debugging).
+- **`tests/`** – Enthält `pytest`-basierte Tests für Kernfunktionen.
+
+Ergänzende Helferskripte wie `exel.py` sind optional und richten sich an fortgeschrittene Nutzer:innen, die den Datenexport bzw. das Troubleshooting automatisieren möchten.
 
 ## Systemvoraussetzungen
 - **Betriebssystem:** Windows, macOS oder Linux (Playwright wird unter allen großen Plattformen unterstützt)
@@ -138,6 +148,19 @@ python PlayHandelsregister.py \
 - `--postal-code`: Aktiviert die Postleitzahl-Filterung; kombiniert mit `--postal-code-col` (Batch) bzw. `--plz` (Single-Shot)
 
 Eine vollständige Übersicht erhalten Sie mit `python PlayHandelsregister.py --help`.
+
+### PDF-Nachbearbeitung
+Bereits heruntergeladene AD-PDFs lassen sich mit den beigefügten Utilities effizient weiterverarbeiten:
+
+```bash
+# Kerndaten mehrerer PDFs extrahieren und als CSV speichern
+python PDFScanner.py --in "~/Downloads/BP" --out "~/Downloads/handelsregister-daten.csv"
+
+# Strukturdump für die Fehlersuche erzeugen (gibt Ausgaben nach stdout aus)
+python PDFdump.py --in "~/Downloads/BP"
+```
+
+`PDFScanner.py` liefert pro Datei Registertyp, Nummer, Firma sowie aufbereitete Adressbestandteile. `PDFdump.py` erstellt ausführliche Text- und Strukturdumps, um Layout-Probleme oder OCR-Scans zu identifizieren. Die Outputs lassen sich optional in der Datei `~/Downloads/HumanCheck.txt` ablegen.
 
 ## Troubleshooting & Hinweise
 - **Mehrere Treffer:** Die Automatisierung verarbeitet nur eindeutige Treffer. Mehrfachtreffer werden im Excel-Protokoll vermerkt.
