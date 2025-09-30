@@ -89,7 +89,7 @@ async def _debug_dump_results(page, clip: int = 5000):
 
 #TODO: No reach, errors
 
-async def rerun_search(keyword: str, mode: str, register_number: str = None, postal_code: str = None, postal_code_option=False, download=False, company_name=None, sap_number=None, outdir=None):
+async def rerun_search(keyword: str, mode: str, register_number: str = None, postal_code: str = None, download=False, company_name=None, sap_number=None, outdir=None):
     global page
     global reruns
     reruns += 1
@@ -101,7 +101,7 @@ async def rerun_search(keyword: str, mode: str, register_number: str = None, pos
     print("[warn] Rerun")
     page = await page.context.new_page()  # Reset page context
     await open_startpage()
-    await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code, postal_code_option=postal_code_option)
+    await perform_search(keyword, mode, register_number=register_number, postal_code=postal_code)
     if download:
         return await download_ad_for_row(company_name, outdir, sap_number)
     return None
@@ -118,7 +118,7 @@ async def open_startpage():
     if debug:
         print("[debug] opened welcome page:", page.url)
 
-async def perform_search(keyword: str, mode: str, register_number: str = None, postal_code: str = None, postal_code_option=False):
+async def perform_search(keyword: str, mode: str, register_number: str = None, postal_code: str = None):
     """
     Click 'Advanced search', fill the form, submit.
     """
@@ -130,7 +130,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
         await page.click("#naviForm\\:erweiterteSucheLink", timeout=30000)
     except PwTimeoutError:
         print("[warn] Could not open Advanced search. Website not reachable or UI may have changed.")
-        await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
+        await rerun_search(keyword, mode, register_number, postal_code)
         return
 
     # Wait for the form to be present (use a field we know)
@@ -138,7 +138,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
         await page.wait_for_selector("#form\\:schlagwoerter", timeout=30000)
     except PwTimeoutError:
         print("[warn] Advanced search form not found; Website not reachable or UI may have changed.")
-        await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
+        await rerun_search(keyword, mode, register_number, postal_code)
         return
 
     # Form fields (JSF IDs usually 'form:schlagwoerter' and 'form:schlagwortOptionen')
@@ -151,7 +151,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
         await page.fill("#form\\:schlagwoerter", keyword)
     except Exception:
         print("[warn] Could not fill 'schlagwoerter' by ID, Website not reachable or UI may have changed.")
-        await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
+        await rerun_search(keyword, mode, register_number, postal_code)
         return
 
     # Print outerHTML
@@ -166,23 +166,25 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
         await page.fill("#form\\:registerNummer", register_number)
     except Exception:
         print("[warn] Could not fill 'registerNummer' by ID, Website not reachable or UI may have changed.")
-        await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
+        await rerun_search(keyword, mode, register_number, postal_code)
         return
 
         #Print outerHTML
         #if debug:
             #await _debug_dump_element(page, "#form\\:registerNummer", "registerNummer")
 
-    if postal_code_option:
-        # Fill postal code if provided
+    postal_code_value = ""
+    if postal_code is not None:
+        postal_code_value = str(postal_code).strip()
+    if postal_code_value:
         try:
-            if postal_code is None:
-                postal_code = ""
-            await page.fill("#form\\:postleitzahl", postal_code)
+            await page.fill("#form\\:postleitzahl", postal_code_value)
         except Exception:
             print("[warn] Could not fill 'postleitzahl' by ID, Website not reachable or UI may have changed.")
-            await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
+            await rerun_search(keyword, mode, register_number, postal_code)
             return
+    else:
+        print(f"[warn] No postal code provided for '{keyword}'. Continuing search without postal code input.")
 
 
     # Radio/select for schlagwortOptionen:
@@ -198,7 +200,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
     except Exception:
         # Fallback by button label
         print("[warn] Could not find search button by ID; Website not reachable or UI may have changed.")
-        await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
+        await rerun_search(keyword, mode, register_number, postal_code)
         return
 
 
@@ -213,7 +215,7 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
         ).first.wait_for(timeout=30000)
     except PwTimeoutError:
         print("[warn] Results table not found; Website not reachable or UI may have changed.")
-        await rerun_search(keyword, mode, register_number, postal_code, postal_code_option)
+        await rerun_search(keyword, mode, register_number, postal_code)
         return
 
     if debug:
@@ -457,7 +459,7 @@ async def main_async(args):
                 #await open_startpage(page, debug=debug)
 
                 # Perform the advanced search with the name + optional register number
-                await perform_search(kw, args.schlagwortOptionen, register_number=reg, postal_code=postal_code, postal_code_option=args.postal)
+                await perform_search(kw, args.schlagwortOptionen, register_number=reg, postal_code=postal_code)
                 print(f"[debug] {kw} | reg={reg or 'None'}")
 
                 # Retrieve the search results (list of rows)
@@ -492,7 +494,7 @@ async def main_async(args):
                         row_locator=r["row_locator"], #currently not used
                     )
                     while path is None:
-                        path = await rerun_search(kw, args.schlagwortOptionen, register_number=reg, postal_code=postal_code, postal_code_option=args.postal, download=True, company_name=company_name, sap_number=sap, outdir=args.outdir)
+                        path = await rerun_search(kw, args.schlagwortOptionen, register_number=reg, postal_code=postal_code, download=True, company_name=company_name, sap_number=sap, outdir=args.outdir)
 
                     update_info = PDFScanner.extract_from_pdf(path) | {"company_name": company_name, "sap_number": sap, "download_path": path} # Extract fields from the downloaded PDF into a dict, override company_name with umlauts replaced
                     if update_info["register_type"] == "unexpected Format":
@@ -544,7 +546,7 @@ async def main_async(args):
             if args.row_number == "-1":
                 print("In single-shot mode you must provide --row_number.")
                 return
-            await perform_search(args.schlagwoerter, args.schlagwortOptionen, register_number=args.register_number)
+            await perform_search(args.schlagwoerter, args.schlagwortOptionen, register_number=args.register_number, postal_code=args.postal_code)
             results = await get_results()
             if len(results) != 1:
                 # Write to HumanCheck.txt in Downloads
@@ -628,11 +630,6 @@ def parse_args():
         action="store_true"
     )
     parser.add_argument(
-        "-postal", "--postal",
-        help="Perform search with postal code",
-        action="store_true"
-    )
-    parser.add_argument(
         "--postal-code-check-col",
         default="I",
         help="Excel column with Postal Code (default I)"
@@ -667,6 +664,12 @@ def parse_args():
     parser.add_argument(
         "-rn", "--register-number",
         help="Optional: Handelsregisternummer to search for",
+        required=False
+    )
+    parser.add_argument(
+        "--postal-code",
+        help="Optional: Postal code for single-shot searches",
+        default=None,
         required=False
     )
     parser.add_argument(
