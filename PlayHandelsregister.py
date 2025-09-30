@@ -32,6 +32,111 @@ page = None  # Global page object for async context
 counter = 0 #for timer logic
 reruns = 0 #for reruns logic
 debug = False
+debug_scan = False
+
+
+async def open_advanced(page, debug: bool = False) -> bool:
+    candidates = [
+        lambda: page.locator("text=/Erweiterte\\s*Suche/i").first(),
+        lambda: page.get_by_role("link", name=re.compile(r"Erweiterte\\s*Suche", re.I)),
+        lambda: page.get_by_role("button", name=re.compile(r"Erweiterte\\s*Suche", re.I)),
+        lambda: page.locator("[id*='erweitert' i], [id*='advanced' i], [name*='erweitert' i], [name*='advanced' i]").first(),
+        lambda: page.locator("a:has-text('Erweitert'), button:has-text('Erweitert')").first(),
+    ]
+    for get in candidates:
+        try:
+            el = get()
+            if await el.count() > 0:
+                await el.click(timeout=2500)
+                await page.wait_for_timeout(300)
+                if debug:
+                    print("[advanced] clicked candidate")
+                return True
+        except Exception:
+            continue
+
+    try:
+        await page.get_by_label(re.compile(r"(Postleitzahl|PLZ)", re.I)).wait_for(timeout=1500)
+        if debug:
+            print("[advanced] form appears open (label found)")
+        return True
+    except Exception:
+        pass
+
+    if debug:
+        print("[advanced] not found via all strategies")
+    return False
+
+
+async def set_plz(page, plz: str, debug: bool = False) -> bool:
+    if not plz:
+        return False
+    candidates = [
+        lambda: page.get_by_label(re.compile(r"(Postleitzahl|PLZ)", re.I)),
+        lambda: page.get_by_placeholder(re.compile(r"(Postleitzahl|PLZ|ZIP|Postcode)", re.I)),
+        lambda: page.locator("[aria-label*='PLZ' i], [aria-label*='Postleit' i], [aria-label*='zip' i]").first(),
+        lambda: page.locator("input[id*='plz' i], input[name*='plz' i]").first(),
+        lambda: page.locator("input[id*='postleit' i], input[name*='postleit' i]").first(),
+        lambda: page.locator("input[id*='zip' i], input[name*='zip' i]").first(),
+    ]
+    for get in candidates:
+        try:
+            el = get()
+            if await el.count() > 0:
+                await el.fill(plz, timeout=3000)
+                if debug:
+                    print(f"[plz] set via candidate -> {plz}")
+                return True
+        except Exception:
+            continue
+    if debug:
+        print("[plz] no candidate matched")
+    return False
+
+
+async def scan_ui(page):
+    print("\n--- UI SCAN: BUTTONS/LINKS ---")
+    for sel in ["button, [role=button], a"]:
+        loc = page.locator(sel)
+        n = await loc.count()
+        for i in range(n):
+            el = loc.nth(i)
+            try:
+                txt = (await el.inner_text()).strip()
+            except Exception:
+                txt = ""
+            try:
+                rid = await el.get_attribute("id")
+                name = await el.get_attribute("name")
+                arial = await el.get_attribute("aria-label")
+                role = await el.get_attribute("role")
+            except Exception:
+                rid = name = arial = role = None
+            print(f"[btn] text='{txt}' id='{rid}' name='{name}' aria-label='{arial}' role='{role}'")
+
+    print("\n--- UI SCAN: INPUTS ---")
+    inputs = page.locator("input, select, textarea")
+    m = await inputs.count()
+    for i in range(m):
+        el = inputs.nth(i)
+        try:
+            rid = await el.get_attribute("id")
+            name = await el.get_attribute("name")
+            ph = await el.get_attribute("placeholder")
+            arial = await el.get_attribute("aria-label")
+            typ = await el.get_attribute("type")
+        except Exception:
+            rid = name = ph = arial = typ = None
+        label_txt = ""
+        if rid:
+            label = page.locator(f"label[for='{rid}']")
+            if await label.count() > 0:
+                try:
+                    label_txt = (await label.first().inner_text()).strip()
+                except Exception:
+                    pass
+        print(f"[in] id='{rid}' name='{name}' type='{typ}' placeholder='{ph}' aria-label='{arial}' label='{label_txt}'")
+    print("--- UI SCAN END ---\n")
 
 
 async def goto_with_retry(page, url: str, attempts: int = 3, base_timeout_ms: int = 60000):
@@ -179,49 +284,6 @@ async def open_startpage():
         print("[debug] opened welcome page:", page.url)
 
 
-async def ensure_advanced_search():
-    """Ensure the advanced search form is visible by clicking the corresponding link/button."""
-    global page
-    global debug
-    label = re.compile(r"Erweiterte Suche", re.I)
-    try:
-        await page.get_by_role("link", name=label).click(timeout=5000)
-        if debug:
-            print("[debug] Activated advanced search via link role.")
-        return
-    except Exception:
-        pass
-
-    try:
-        await page.get_by_role("button", name=label).click(timeout=5000)
-        if debug:
-            print("[debug] Activated advanced search via button role.")
-        return
-    except Exception:
-        pass
-
-    candidates = [
-        ("link", page.get_by_role("link", name=label)),
-        ("button", page.get_by_role("button", name=label)),
-        ("legacy-id", page.locator("#naviForm\\:erweiterteSucheLink")),
-    ]
-    for description, locator in candidates:
-        try:
-            if await locator.count() == 0:
-                continue
-            handle = locator.first
-            if not await handle.is_enabled():
-                continue
-            if not await handle.is_visible():
-                continue
-            await handle.click()
-            if debug:
-                print(f"[debug] Activated advanced search via {description} locator.")
-            break
-        except Exception as exc:
-            print(f"[warn] Could not activate advanced search via {description}: {exc}")
-
-
 async def perform_search(keyword: str, mode: str, register_number: str = None, postal_code: str = None):
     """
     Click 'Advanced search', fill the form, submit.
@@ -229,7 +291,11 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
     global page
     global counter
     global debug
-    await ensure_advanced_search()
+    global debug_scan
+
+    opened = await open_advanced(page, debug=debug_scan)
+    if not opened and debug_scan:
+        await scan_ui(page)
 
     # Wait for the form to be present (use a field we know)
     try:
@@ -273,18 +339,13 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
 
     postal_code_value = str(postal_code).strip() if postal_code else ""
     if postal_code_value:
-        label_regex = re.compile(r"(Postleitzahl|PLZ)", re.I)
-        try:
-            field = page.get_by_label(label_regex)
-            if await field.count():
-                await field.first.fill(postal_code_value, timeout=4000)
-                print(f"[info] Postal code '{postal_code_value}' filled via label locator.")
-            else:
-                fallback = page.locator("#form\\:postleitzahl")
-                await fallback.fill(postal_code_value, timeout=4000)
-                print(f"[info] Postal code '{postal_code_value}' filled via fallback ID locator.")
-        except Exception as exc:
-            print(f"[warn] Could not set postal code '{postal_code_value}': {exc}")
+        ok = await set_plz(page, postal_code_value, debug=debug_scan)
+        if ok:
+            print(f"[info] Postal code '{postal_code_value}' set.")
+        else:
+            print(f"[warn] Could not set postal code '{postal_code_value}'.")
+            if debug_scan:
+                print("[hint] PLZ-Selektoren passen nicht. Siehe UI-SCAN oben und ergänze eine passende Heuristik.")
     else:
         if debug:
             print(f"[debug] Postal code filter inactive for '{keyword}'.")
@@ -500,8 +561,10 @@ async def main_async(args):
     global page
     global counter
     global debug
+    global debug_scan
 
     debug = args.debug
+    debug_scan = getattr(args, "debug_scan", False)
     # Ensure output directory exists
     if not os.path.exists(args.outdir):
         default_path = os.path.join(os.path.expanduser("~"), "Downloads", "BP")
@@ -800,6 +863,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Enable debug-style prints",
         action="store_true"
+    )
+    parser.add_argument(
+        "--debug-scan",
+        action="store_true",
+        help="Dump UI (Buttons/Links/Inputs) zur Selektor-Diagnose",
     )
     parser.add_argument(
         "-s", "--schlagwoerter",
