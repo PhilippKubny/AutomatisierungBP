@@ -18,14 +18,14 @@ import re
 import time
 import sys
 from datetime import date
-from typing import Optional
+from typing import Optional, Callable, Iterable
 
 from openpyxl import load_workbook
 
 import exel
 import PDFScanner
 
-from playwright.async_api import async_playwright, TimeoutError as PWTimeoutError
+from playwright.async_api import async_playwright, TimeoutError as PWTimeoutError, Locator
 
 
 page = None  # Global page object for async context
@@ -35,25 +35,171 @@ debug = False
 debug_scan = False
 
 
-async def open_advanced(page, debug: bool = False) -> bool:
-    candidates = [
-        lambda: page.locator("text=/Erweiterte\\s*Suche/i").first(),
-        lambda: page.get_by_role("link", name=re.compile(r"Erweiterte\\s*Suche", re.I)),
-        lambda: page.get_by_role("button", name=re.compile(r"Erweiterte\\s*Suche", re.I)),
-        lambda: page.locator("[id*='erweitert' i], [id*='advanced' i], [name*='erweitert' i], [name*='advanced' i]").first(),
-        lambda: page.locator("a:has-text('Erweitert'), button:has-text('Erweitert')").first(),
-    ]
-    for get in candidates:
+LocatorFactory = Callable[[], Locator]
+
+
+async def _first_existing_locator(candidates: Iterable[LocatorFactory]) -> Optional[Locator]:
+    """Return the first locator from *candidates* that resolves to at least one element."""
+    for make_locator in candidates:
         try:
-            el = get()
-            if await el.count() > 0:
-                await el.click(timeout=2500)
-                await page.wait_for_timeout(300)
-                if debug:
-                    print("[advanced] clicked candidate")
-                return True
+            locator = make_locator()
         except Exception:
             continue
+        try:
+            if await locator.count() > 0:
+                return locator
+        except Exception:
+            continue
+    return None
+
+
+async def _fill_candidate(
+    page,
+    candidates: Iterable[LocatorFactory],
+    value: str,
+    label: str,
+    *,
+    debug_enabled: bool = False,
+):
+    """Try to fill *value* into the first matching locator from *candidates*.
+
+    Returns the locator on success so callers can reuse it (e.g. to press Enter), otherwise ``None``.
+    """
+
+    locator = await _first_existing_locator(candidates)
+    if locator is None:
+        if debug_enabled:
+            print(f"[{label}] no candidate locator matched.")
+        return None
+
+    try:
+        await locator.fill(value, timeout=4000)
+        if debug_enabled:
+            print(f"[{label}] filled using locator {await locator.evaluate('el => el.tagName')}")
+        return locator
+    except Exception:
+        # Fallback: try to manually clear via keyboard before typing
+        try:
+            await locator.click(timeout=2000)
+            await locator.press("Control+A")
+            await locator.type(value, delay=20)
+            if debug_enabled:
+                print(f"[{label}] typed value via keyboard fallback.")
+            return locator
+        except Exception as exc:
+            if debug_enabled:
+                print(f"[{label}] failed to fill value: {exc}")
+            return None
+
+
+async def _check_candidate(
+    page,
+    candidates: Iterable[LocatorFactory],
+    label: str,
+    *,
+    debug_enabled: bool = False,
+) -> bool:
+    """Check (or click) the first radio/checkbox candidate."""
+
+    locator = await _first_existing_locator(candidates)
+    if locator is None:
+        if debug_enabled:
+            print(f"[{label}] no candidate locator matched.")
+        return False
+
+    try:
+        await locator.check(timeout=4000)
+        if debug_enabled:
+            print(f"[{label}] checked via locator.")
+        return True
+    except Exception:
+        try:
+            await locator.click(timeout=4000)
+            if debug_enabled:
+                print(f"[{label}] clicked locator as fallback.")
+            return True
+        except Exception as exc:
+            if debug_enabled:
+                print(f"[{label}] failed to activate locator: {exc}")
+            return False
+
+
+async def _click_candidate(
+    page,
+    candidates: Iterable[LocatorFactory],
+    label: str,
+    *,
+    debug_enabled: bool = False,
+    delay_ms: int = 250,
+) -> bool:
+    """Click the first matching locator from *candidates*."""
+
+    locator = await _first_existing_locator(candidates)
+    if locator is None:
+        if debug_enabled:
+            print(f"[{label}] no candidate locator matched.")
+        return False
+
+    try:
+        await locator.click(timeout=4000)
+        if delay_ms:
+            await page.wait_for_timeout(delay_ms)
+        if debug_enabled:
+            text = ""
+            try:
+                text = (await locator.inner_text()).strip()
+            except Exception:
+                pass
+            print(f"[{label}] clicked locator with text '{text}'.")
+        return True
+    except Exception as exc:
+        if debug_enabled:
+            print(f"[{label}] failed to click locator: {exc}")
+        return False
+
+
+async def _wait_for_any_selector(page, selectors: Iterable[str], timeout: int = 30000) -> Optional[str]:
+    """Wait until any selector from *selectors* appears and return the one that matched."""
+
+    deadline = time.monotonic() + (timeout / 1000.0)
+    last_error: Optional[Exception] = None
+    for selector in selectors:
+        remaining = int((deadline - time.monotonic()) * 1000)
+        if remaining <= 0:
+            break
+        try:
+            await page.wait_for_selector(selector, timeout=remaining)
+            return selector
+        except Exception as exc:
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise last_error
+    raise PWTimeoutError(f"Timeout waiting for selectors: {', '.join(selectors)}")
+
+
+async def open_advanced(page, debug: bool = False) -> bool:
+    candidates = [
+        lambda: page.get_by_role("button", name=re.compile(r"(Erweiterte|Weitere)\\s+Suche", re.I)).first(),
+        lambda: page.get_by_role("link", name=re.compile(r"(Erweiterte|Weitere)\\s+Suche", re.I)).first(),
+        lambda: page.locator("text=/Erweiterte\\s*Suche/i").first(),
+        lambda: page.locator("text=/Weitere\\s*Suchoptionen/i").first(),
+        lambda: page.locator("text=/Weitere\\s*Suchkriterien/i").first(),
+        lambda: page.locator("button:has-text('Erweiterte Suche')").first(),
+        lambda: page.locator("a:has-text('Erweiterte Suche')").first(),
+        lambda: page.locator("[aria-controls*='erweitert' i]").first(),
+        lambda: page.locator("[data-action*='advanced' i], [data-testid*='advanced' i]").first(),
+        lambda: page.locator("[id*='erweitert' i], [name*='erweitert' i]").first(),
+    ]
+    clicked = await _click_candidate(
+        page,
+        candidates,
+        "advanced",
+        debug_enabled=debug,
+        delay_ms=350,
+    )
+    if clicked:
+        return True
 
     try:
         await page.get_by_label(re.compile(r"(Postleitzahl|PLZ)", re.I)).wait_for(timeout=1500)
@@ -74,21 +220,22 @@ async def set_plz(page, plz: str, debug: bool = False) -> bool:
     candidates = [
         lambda: page.get_by_label(re.compile(r"(Postleitzahl|PLZ)", re.I)),
         lambda: page.get_by_placeholder(re.compile(r"(Postleitzahl|PLZ|ZIP|Postcode)", re.I)),
+        lambda: page.get_by_role("textbox", name=re.compile(r"(Postleitzahl|PLZ)", re.I)).first(),
         lambda: page.locator("[aria-label*='PLZ' i], [aria-label*='Postleit' i], [aria-label*='zip' i]").first(),
         lambda: page.locator("input[id*='plz' i], input[name*='plz' i]").first(),
         lambda: page.locator("input[id*='postleit' i], input[name*='postleit' i]").first(),
         lambda: page.locator("input[id*='zip' i], input[name*='zip' i]").first(),
+        lambda: page.locator("input[title*='PLZ' i], input[data-label*='PLZ' i]").first(),
     ]
-    for get in candidates:
-        try:
-            el = get()
-            if await el.count() > 0:
-                await el.fill(plz, timeout=3000)
-                if debug:
-                    print(f"[plz] set via candidate -> {plz}")
-                return True
-        except Exception:
-            continue
+    locator = await _fill_candidate(
+        page,
+        candidates,
+        plz,
+        "plz",
+        debug_enabled=debug,
+    )
+    if locator:
+        return True
     if debug:
         print("[plz] no candidate matched")
     return False
@@ -152,8 +299,19 @@ async def goto_with_retry(page, url: str, attempts: int = 3, base_timeout_ms: in
             except Exception:
                 pass
             try:
-                await page.wait_for_selector("text=Erweiterte Suche", timeout=10000)
-            except PWTimeoutError:
+                await _wait_for_any_selector(
+                    page,
+                    [
+                        "text=Erweiterte Suche",
+                        "text=Weitere Suchoptionen",
+                        "text=Weitere Suchkriterien",
+                        "text=Erweiterte Suchkriterien",
+                        "text=Erweiterte Suche anzeigen",
+                        "input[type='text']",
+                    ],
+                    timeout=12000,
+                )
+            except Exception:
                 await page.wait_for_selector("input[type='text']", timeout=5000)
             return
         except Exception as e:
@@ -297,45 +455,64 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
     if not opened and debug_scan:
         await scan_ui(page)
 
-    # Wait for the form to be present (use a field we know)
     try:
-        await page.wait_for_selector("#form\\:schlagwoerter", timeout=30000)
-    except PWTimeoutError:
+        await _wait_for_any_selector(
+            page,
+            [
+                "#form\\:schlagwoerter",
+                "[id$='schlagwoerter']",
+                "[name$='schlagwoerter']",
+                "input[id*='schlagwort' i]",
+                "text=/Schlagwort/i",
+            ],
+            timeout=30000,
+        )
+    except Exception:
         print("[warn] Advanced search form not found; Website not reachable or UI may have changed.")
         await rerun_search(keyword, mode, register_number, postal_code)
         return
 
-    # Form fields (JSF IDs usually 'form:schlagwoerter' and 'form:schlagwortOptionen')
-    # We'll try robust selectors by id and by name.
-    # Keyword input:
-    try:
-        words = [w for w in re.split(r"[ -]+", keyword) if w]
-        first_five = " ".join(words[:5])
-        keyword = first_five  # Limit to first 5 words for search
-        await page.fill("#form\\:schlagwoerter", keyword)
-    except Exception:
-        print("[warn] Could not fill 'schlagwoerter' by ID, Website not reachable or UI may have changed.")
+    words = [w for w in re.split(r"[ -]+", keyword) if w]
+    keyword = " ".join(words[:5])  # Limit to first 5 words for search
+
+    keyword_locator = await _fill_candidate(
+        page,
+        [
+            lambda: page.locator("#form\\:schlagwoerter"),
+            lambda: page.locator("[id$='schlagwoerter']").first(),
+            lambda: page.locator("[name$='schlagwoerter']").first(),
+            lambda: page.get_by_label(re.compile(r"Schlagwort", re.I)).first(),
+            lambda: page.get_by_placeholder(re.compile(r"Schlagwort", re.I)).first(),
+            lambda: page.get_by_role("textbox", name=re.compile(r"Schlagwort", re.I)).first(),
+        ],
+        keyword,
+        "schlagwoerter",
+        debug_enabled=debug_scan,
+    )
+    if keyword_locator is None:
+        print("[warn] Could not fill keyword field; Website not reachable or UI may have changed.")
         await rerun_search(keyword, mode, register_number, postal_code)
         return
 
-    # Print outerHTML
-    #if debug:
-        #await _debug_dump_element(page, "#form\\:schlagwoerter", "schlagwoerter")
-
-    #If a register number is provided, fill it in:
-
-    try:
-        if register_number is None:
-            register_number = ""
-        await page.fill("#form\\:registerNummer", register_number)
-    except Exception:
-        print("[warn] Could not fill 'registerNummer' by ID, Website not reachable or UI may have changed.")
+    register_number = (register_number or "").strip()
+    register_locator = await _fill_candidate(
+        page,
+        [
+            lambda: page.locator("#form\\:registerNummer"),
+            lambda: page.locator("[id$='registerNummer']").first(),
+            lambda: page.locator("[name$='registerNummer']").first(),
+            lambda: page.get_by_label(re.compile(r"Register-?nummer", re.I)).first(),
+            lambda: page.get_by_placeholder(re.compile(r"Register-?nummer", re.I)).first(),
+            lambda: page.get_by_role("textbox", name=re.compile(r"Register", re.I)).first(),
+        ],
+        register_number,
+        "registernummer",
+        debug_enabled=debug_scan,
+    )
+    if register_locator is None and register_number:
+        print("[warn] Could not fill register number field; Website not reachable or UI may have changed.")
         await rerun_search(keyword, mode, register_number, postal_code)
         return
-
-        #Print outerHTML
-        #if debug:
-            #await _debug_dump_element(page, "#form\\:registerNummer", "registerNummer")
 
     postal_code_value = str(postal_code).strip() if postal_code else ""
     if postal_code_value:
@@ -353,19 +530,49 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
 
     # Radio/select for schlagwortOptionen:
     so_value = SCHLAGWORT_OPTIONEN[mode]
-    # This field is rendered as radio buttons (values 1,2,3). Try robust selection:
-    # Common pattern: input[name='form:schlagwortOptionen'][value='1']
-    radio_selector = f"input[name='form:schlagwortOptionen'][value='{so_value}']"
-    await page.check(radio_selector)
-
-    # Submit the form by clicking the search button (works even if only registerNummer is filled)
-    try:
-        await page.click("#form\\:btnSuche", timeout=30000) # ID for the search button
-    except Exception:
-        # Fallback by button label
-        print("[warn] Could not find search button by ID; Website not reachable or UI may have changed.")
+    radio_candidates = [
+        lambda: page.locator(f"input[name='form:schlagwortOptionen'][value='{so_value}']"),
+        lambda: page.locator(f"input[value='{so_value}'][name*='schlagwortOptionen']"),
+        lambda: page.locator(f"[id*='schlagwortOptionen'] input[value='{so_value}']").first(),
+        lambda: page.locator(f"input[type='radio'][value='{so_value}']").first(),
+    ]
+    if not await _check_candidate(page, radio_candidates, "schlagwortOptionen", debug_enabled=debug_scan):
+        print("[warn] Could not activate keyword mode radio button; Website not reachable or UI may have changed.")
         await rerun_search(keyword, mode, register_number, postal_code)
         return
+
+    search_candidates = [
+        lambda: page.locator("#form\\:btnSuche"),
+        lambda: page.locator("[id$='btnSuche']").first(),
+        lambda: page.locator("[id*='suche'][type='submit']").first(),
+        lambda: page.locator("input[type='submit'][value*='Suche' i]").first(),
+        lambda: page.get_by_role("button", name=re.compile(r"Suche\\s*(starten|ausführen|beginnen)?", re.I)).first(),
+        lambda: page.get_by_role("button", name=re.compile(r"Suchen", re.I)).first(),
+        lambda: page.locator("button:has-text('Suche')").first(),
+    ]
+    clicked = await _click_candidate(
+        page,
+        search_candidates,
+        "search-button",
+        debug_enabled=debug_scan,
+        delay_ms=400,
+    )
+
+    if not clicked:
+        pressed_enter = False
+        try:
+            if keyword_locator is not None:
+                await keyword_locator.press("Enter")
+                pressed_enter = True
+                if debug_scan:
+                    print("[search-button] pressed Enter in keyword field as fallback.")
+        except Exception:
+            pressed_enter = False
+
+        if not pressed_enter:
+            print("[warn] Could not trigger search; Website not reachable or UI may have changed.")
+            await rerun_search(keyword, mode, register_number, postal_code)
+            return
 
 
     if debug:
@@ -374,10 +581,19 @@ async def perform_search(keyword: str, mode: str, register_number: str = None, p
     counter += 1 # Successfully clicked on search -> counter +1
     # Wait for results table, check for specific section in HTML body
     try:
-        await page.locator(
-            "#ergebnissForm\\:selectedSuchErgebnisFormTable_data"
-        ).first.wait_for(timeout=30000)
-    except PWTimeoutError:
+        await _wait_for_any_selector(
+            page,
+            [
+                "#ergebnissForm\\:selectedSuchErgebnisFormTable_data",
+                "#ergebnisForm\\:selectedSuchErgebnisFormTable_data",
+                "[id$='selectedSuchErgebnisFormTable_data']",
+                "table[role='grid']",
+                "table[id*='Ergebnis']",
+                "text=/Keine Daten|Kein Ergebnis/i",
+            ],
+            timeout=30000,
+        )
+    except Exception:
         print("[warn] Results table not found; Website not reachable or UI may have changed.")
         await rerun_search(keyword, mode, register_number, postal_code)
         return
@@ -392,38 +608,64 @@ async def get_results(postal_code: Optional[str] = None):
     Returns list of dicts with minimal fields, and row locators for clicking AD per row.
     """
     global debug
-    rows = page.locator("table[role='grid'] tr[data-ri]")  # JSF data row index attribute
+    row_selector = (
+        "table[role='grid'] tr[data-ri], "
+        "table[id*='Ergebnis'] tr[data-ri], "
+        "table[id*='Ergebnis'] tbody tr"
+    )
+    rows = page.locator("".join(row_selector))
     count = await rows.count()
     results = []
 
     for i in range(count):
         row = rows.nth(i)
 
-        # Typical columns: [state, court, name/company, registered office, status, ...]
-        # The exact order can vary slightly; we’ll fetch visible cell texts and assign minimally.
+        try:
+            if not await row.is_visible():
+                continue
+        except Exception:
+            pass
+
         cells = row.locator("td")
         ccount = await cells.count()
+        if ccount == 0:
+            continue
+
         texts = []
         for j in range(ccount):
-            # inner_text keeps formatting; text_content is also fine.
-            t = (await cells.nth(j).inner_text()).strip()
+            try:
+                t = (await cells.nth(j).inner_text()).strip()
+            except Exception:
+                t = ""
             texts.append(t)
 
-        # Heuristic mapping (based on your mechanize parser)
-        # 0: (ui panel filler)
-        # 1: court
-        # 2: company/name
-        # 3: registered office (state sometimes elsewhere)
-        # 4: status
-        # We’ll just keep some fields robustly:
-        court = texts[1] if len(texts) > 1 else ""
-        name = texts[2] if len(texts) > 2 else ""
-        registered_office = texts[3] if len(texts) > 3 else ""
-        status = texts[4] if len(texts) > 4 else ""
+        row_text = " ".join(texts).strip()
+        if not row_text:
+            continue
+        if re.search(r"Keine\s+(Treffer|Daten|Ergebnisse)", row_text, re.I):
+            if debug:
+                print(f"[debug] Skipping non-result row {i}: {row_text}")
+            continue
+
+        def _safe(idx: int, fallback: str = "") -> str:
+            if len(texts) > idx and texts[idx]:
+                return texts[idx]
+            return fallback
+
+        court = _safe(1, _safe(0, ""))
+        name = _safe(2, _safe(1, ""))
+        registered_office = _safe(3, _safe(2, ""))
+        status = _safe(4, _safe(3, ""))
 
         address = None
         address_source = None
-        for selector in (".address", ".ergebnisAdresse", ".result-address"):
+        for selector in (
+            ".address",
+            ".ergebnisAdresse",
+            ".result-address",
+            "[data-label*='Adresse']",
+            "td[data-label*='Ort']",
+        ):
             try:
                 locator = row.locator(selector)
                 if await locator.count():
@@ -510,17 +752,43 @@ async def download_ad_for_row(company_name, outdir, sap_number=None, row_locator
 
         # Most specific & stable selector for AD (per your HTML)
         # Trigger and capture the download
+        ad_candidates = []
+        if row_locator is not None:
+            ad_candidates.extend(
+                [
+                    lambda: row_locator.locator("a[onclick*='Dokumentart.AD']").first(),
+                    lambda: row_locator.get_by_role("link", name=re.compile(r"\bAD\b", re.I)).first(),
+                    lambda: row_locator.locator("button:has-text('AD')").first(),
+                ]
+            )
+        ad_candidates.extend(
+            [
+                lambda: page.locator("#ergebnissForm\\:selectedSuchErgebnisFormTable_data a[onclick*='Dokumentart.AD']").first(),
+                lambda: page.locator("#ergebnisForm\\:selectedSuchErgebnisFormTable_data a[onclick*='Dokumentart.AD']").first(),
+                lambda: page.locator("[id$='selectedSuchErgebnisFormTable_data'] a[onclick*='Dokumentart.AD']").first(),
+                lambda: page.locator("a[data-dokumentart='AD']").first(),
+                lambda: page.get_by_role("link", name=re.compile(r"\bAD\b", re.I)).first(),
+                lambda: page.locator("a:has-text('AD')").first(),
+            ]
+        )
+
+        ad_locator = await _first_existing_locator(ad_candidates)
+        if ad_locator is None:
+            print(f"[warn] Failed to locate AD link for '{company_name}'; download may not have started.")
+            return None
+
         try:
-            ad_link = page.locator("#ergebnissForm\\:selectedSuchErgebnisFormTable_data a[onclick*='Global.Dokumentart.AD']")
+            await ad_locator.scroll_into_view_if_needed()
+        except Exception:
+            pass
+
+        try:
             async with page.expect_download(timeout=40000) as dl_info:
-                await ad_link.click()
+                await ad_locator.click()
             download = await dl_info.value
             if debug:
                 print(f"[debug] Download started for '{company_name}': {download.suggested_filename}")
         except Exception:
-            #check_file = os.path.join(os.path.expanduser("~"), "Downloads", "HumanCheck.txt")
-            #with open(check_file, "a") as f:
-            #    f.write(f"\n\n[warn] Failed to click AD link for '{company_name}'; download may not have started. (SAP={sap_number or 'None'})")
             print(f"[warn] Failed to click AD link for '{company_name}'; download may not have started.")
             return None
 
