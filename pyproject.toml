@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bpauto"
+version = "0.1.0"
+description = "Automation tools for BP NorthData integration"
+authors = [{ name = "Automation Team" }]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "requests",
+  "openpyxl",
+  "pydantic",
+  "tenacity",
+  "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bpauto"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
