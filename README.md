@@ -1,163 +1,102 @@
-# Handelsregister Automation Toolkit
+# AutomatisierungBP
 
-AutomatisierungBP automatisiert die Recherche im deutschen Handelsregister und verarbeitet die Ergebnisse für interne Business-Partner-Prüfungen. Das Tool füllt Web-Formulare per Playwright, lädt amtliche Ausdrucke (AD-PDFs) herunter, extrahiert deren Inhalte und schreibt die Daten zurück in Excel-Tabellen.
+AutomatisierungBP bündelt Skripte und Integrationen, um Handelsregister-Recherchen, PDF-Extraktionen und Excel-Updates für Business-Partner-Prüfungen zu automatisieren. Die Sammlung kombiniert einen Playwright-Scraper, einen NorthData-API-Provider sowie robuste Excel-/PDF-Helfer in einer installierbaren Python-Distribution.
 
-## Inhaltsverzeichnis
+## Highlights
 
-- [Überblick](#überblick)
-- [Hauptfunktionen](#hauptfunktionen)
-- [Projektaufbau](#projektaufbau)
-- [Voraussetzungen](#voraussetzungen)
-- [Installation](#installation)
-- [Konfiguration](#konfiguration)
-- [Anwendung](#anwendung)
-  - [Stapelverarbeitung mit Excel](#stapelverarbeitung-mit-excel)
-  - [Einzelabfragen](#einzelabfragen)
-  - [Gemeinsame Argumente](#gemeinsame-argumente)
-- [Ausgabe und Ergebnisdateien](#ausgabe-und-ergebnisdateien)
-- [Troubleshooting](#troubleshooting)
-- [Weiterentwicklung](#weiterentwicklung)
-
-## Überblick
-
-Das Skript `PlayHandelsregister.py` bildet die manuelle Recherche auf [handelsregister.de](https://www.handelsregister.de/rp_web/welcome.xhtml) nach. Es navigiert zur erweiterten Suche, setzt die übergebenen Parameter, lädt bei eindeutigen Treffern die AD-PDFs herunter und aktualisiert definierte Zellen einer Excel-Arbeitsmappe. Unterstützende Module kümmern sich um das Lesen/Schreiben der Excel-Datei (`exel.py`) sowie die Texterkennung aus AD-PDFs (`PDFScanner.py`).
-
-## Hauptfunktionen
-
-- Automatisiertes Ausfüllen der erweiterten Suche im Handelsregister.
-- Verarbeitung von Excel-Tabellen zur Stapelprüfung mehrerer Unternehmen.
-- Optionaler Download der amtlichen Ausdrucke (AD) pro Treffer.
-- Auslesen relevanter Stammdaten (Firma, Registernummer, Adresse) aus AD-PDFs.
-- Rückschreiben der ermittelten Informationen in frei konfigurierbare Excel-Spalten.
-- Debug- und Wiederholungslogik zur Minimierung von Ausfällen durch UI-Änderungen oder Rate Limits.
-
-## Projektaufbau
-
-| Datei | Zweck |
-| --- | --- |
-| `PlayHandelsregister.py` | Zentrales CLI-Skript, steuert Playwright-Browser, Download und Excel-Update. |
-| `exel.py` | Hilfsfunktionen zum Lesen und Aktualisieren der Excel-Datei. |
-| `PDFScanner.py` | Erkennung relevanter Textpassagen in AD-PDFs und Strukturierung der Daten. |
-| `PDFdump.py` | Debugging-Werkzeug zum Analysieren neuer/abweichender PDF-Strukturen. |
-| `test_handelsregister.py` | Ausgangspunkt für automatisierte Tests (z. B. Parser/Scanner). |
-
-## Voraussetzungen
-
-- Python 3.11 oder neuer.
-- Google Chrome oder Microsoft Edge ist nicht erforderlich; Playwright bringt eigene Browser-Bundles mit.
-- Schreib-/Leserechte auf das Excel- und Download-Verzeichnis.
+- Einheitliches CLI `bpauto` für Batch-Updates aus Excel-Dateien.
+- Wiederverwendbare Provider-Schnittstelle zur Anbindung externer Datenquellen (z. B. NorthData).
+- Werkzeuge für PDF-Parsing und Excel-Schreiboperationen, inklusive Fehlerhandling.
+- Konsistente Logging-Ausgabe via `bpauto.utils.logging_setup`.
 
 ## Installation
 
-1. Repository klonen oder als ZIP herunterladen.
-2. (Empfohlen) Virtuelle Umgebung anlegen.
-3. Abhängigkeiten installieren:
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
+pip install -e .[dev]
+```
 
-   ```bash
-   pip install -r requirements.txt
-   playwright install
-   ```
-
-   Der zweite Befehl installiert die benötigten Browser-Binaries für Playwright.
+Optionale Tools wie Playwright-Browser oder zusätzliche Provider-Abhängigkeiten müssen separat installiert werden.
 
 ## Konfiguration
 
-### Excel-Vorbereitung
+Kopiere `.env.example` nach `.env` und hinterlege den NorthData-API-Schlüssel:
 
-- Das Tool erwartet eine Excel-Datei mit Kopfzeilen in den ersten beiden Zeilen. Standardmäßig beginnt die Verarbeitung ab Zeile 3.
-- Relevante Spalten können über CLI-Argumente konfiguriert werden. Standardwerte:
-
-  | Zweck | Standardspalte |
-  | --- | --- |
-  | SAP-Lieferantennummer | `A` |
-  | SAP-Kundennummer | `B` |
-  | Firmenname (Eingabe) | `C` |
-  | Land | `J` |
-  | Postleitzahl (Eingabe) | `I` |
-  | Registertyp (Ausgabe) | `V` |
-  | Registernummer (Ausgabe) | `U` |
-  | Dokumentpfad | `P` |
-  | Änderungsbedarf | `Q` |
-  | Datum letzte Prüfung | `S` |
-  | Ergebniszählung/Log (`name1-4`) | `T` |
-  | Adressdaten (Straße, Hausnummer, Stadt, PLZ) | `X`, `Y`, `Z`, `AA` |
-
-- Eigene Spaltenzuordnungen lassen sich über die entsprechenden `--*-col` Argumente anpassen.
-
-### Download-Verzeichnis
-
-- Ohne Angabe wird im Benutzerverzeichnis `~/Downloads/BP` angelegt.
-- Alternativ kann mit `--outdir` ein eigener Pfad gesetzt werden.
-
-## Anwendung
-
-Das CLI unterscheidet zwei Betriebsmodi: Stapelverarbeitung mit Excel (`--excel`) und Einzelabfragen. In beiden Fällen empfiehlt es sich, bei UI-Problemen den Debug-Modus zu aktivieren (`--debug`).
-
-### Stapelverarbeitung mit Excel
-
-```bash
-python PlayHandelsregister.py \
-  --excel "C:\\Users\\User\\Downloads\\TestBP.xlsx" \
-  --sheet "Tabelle1" \
-  --start 25 \
-  --end 30 \
-  --download-ad \
-  --postal \
-  --outdir "C:\\Users\\User\\Downloads\\BP" \
-  --debug
+```dotenv
+NORTHDATA_API_KEY=dein_api_key
 ```
 
-- `--start` und `--end` definieren den verarbeiteten Zeilenbereich (inklusiv).
-- `--postal` ergänzt die Suche um Postleitzahlen (falls in der Excel hinterlegt).
-- `--download-ad` speichert AD-PDFs für eindeutige Treffer.
-- Fehler wie Mehrfachtreffer oder nicht gefundene Firmen werden in der konfigurierten Ergebnis-Spalte protokolliert.
-
-### Einzelabfragen
+## Verwendung
 
 ```bash
-python PlayHandelsregister.py \
-  --schlagwoerter "THYSSENKRUPP SCHULTE GMBH" \
-  --register-number "26718" \
-  --sap-number "2203241" \
-  --row-number "352" \
-  --download-ad \
-  --postal \
-  --outdir "C:\\Users\\User\\Downloads\\BP"
+bpauto --excel "Liste.xlsx" --sheet "Tabelle1" --source api
 ```
 
-- `--schlagwoerter` ist Pflicht (Firmenname bzw. Stichworte).
-- `--sap-number` und `--row-number` dienen zur Zuordnung in der Excel-Datei und sind im Einzelmodus erforderlich.
-- `--register-number` erhöht die Treffergenauigkeit, ist aber optional.
+Wichtige Optionen:
 
-### Gemeinsame Argumente
+- `--start` / `--end`: Zeilenbereich (1-basiert) begrenzen.
+- `--mapping-yaml`: eigenes Mapping zwischen `CompanyRecord`-Feldern und Excel-Spalten.
+- `--download-ad`: amtliche Ausdrucke (AD) als PDF speichern.
+- `--dry-run`: Daten nur abrufen, keine Excel-Schreibvorgänge.
+- `--verbose`: detailliertere Log-Ausgabe.
 
-| Argument | Beschreibung |
-| --- | --- |
-| `-d`, `--debug` | Zusätzliche Konsolenausgaben für Fehlersuche. |
-| `--headful` | Öffnet den Browser sichtbar (Standard: headless). |
-| `--schlagwortOptionen {all,min,exact}` | Steuerung der Suchlogik (alle Stichworte, mindestens eines, exakte Übereinstimmung). |
-| `--postal` | Aktiviert Postleitzahl-Suche (setzt voraus, dass ein Wert vorliegt). |
-| `--download-ad` | Lädt AD-PDFs in das Ausgabeverzeichnis. |
-| `--outdir PATH` | Zielordner für Downloads und Prüfdateien. |
-| `--start/--end` | Zeilenbereich bei Excel-Stapelverarbeitung. |
+## Repository Structure & Responsibilities
 
-Eine vollständige Auflistung aller Argumente liefert `python PlayHandelsregister.py --help`.
+```
+AutomatisierungBP/
+├── pyproject.toml            # Projekt- und Build-Metadaten
+├── README.md                 # Dieses Dokument
+├── .env.example              # Vorlage für sensible Einstellungen
+├── .gitignore                # Ignore-Regeln (Virtualenvs, Artefakte, usw.)
+├── mappings/                 # Beispielhafte Mapping-Dateien für Excel
+├── src/
+│   └── bpauto/
+│       ├── __init__.py       # Paket-Exports
+│       ├── cli.py            # CLI-Einstiegspunkt
+│       ├── excel_io.py       # Lesen/Schreiben von Excel-Tabellen
+│       ├── pdf_scanner.py    # PDF-Auswertung
+│       ├── handelsregister.py# Playwright-Scraper für handelsregister.de
+│       ├── providers/
+│       │   ├── __init__.py   # Provider-Exports
+│       │   ├── base.py       # Gemeinsame Typen/Protokolle
+│       │   └── northdata.py  # NorthData-API-Integration
+│       └── utils/
+│           └── logging_setup.py  # Zentrales Logger-Setup
+├── tests/
+│   ├── test_excel_io.py      # Unit-Tests für Excel-Helfer
+│   ├── test_provider_northdata.py # Tests für den API-Provider
+│   ├── test_handelsregister.py    # Parser-/Scraper-Regressionsfälle
+│   └── smoke_fetch.py        # Einfache Smoke-CLI für NorthData
+├── vendor/
+│   └── bp_api/               # Eingebettete Legacy-Komponenten
+└── Makefile                  # Hilfstasks für Tests/Linting
+```
 
-## Ausgabe und Ergebnisdateien
+## How to add new Providers (e.g. Orbis, NorthData, Scraper)
 
-- **AD-PDFs** werden als `<SAP- oder interner Schlüssel>_<Firmenname>_<YYYY-MM-DD>.pdf` im gewählten Ausgabeverzeichnis gespeichert.
-- **Excel-Updates**: Bei eindeutigen Treffern aktualisiert das Skript Name, Adresse, Registernummer, Registertyp, Downloadpfad sowie Status- und Datumsfelder.
-- **Protokollierung**: Mehrfachtreffer oder Fehlermeldungen werden in der Ergebnis-Spalte (Standard `T`) mitgezählt bzw. beschrieben (`Unexpected format`, `0` für keine Treffer etc.).
+1. Lege ein neues Modul unter `src/bpauto/providers/` an und implementiere das `Provider`-Protokoll aus `base.py`.
+2. Nutze das Logging über `setup_logger()` für nachvollziehbare Ausgaben und Fehlerbehandlung.
+3. Registriere den Provider in `src/bpauto/providers/__init__.py`, damit er per `bpauto.providers` importierbar wird.
+4. Ergänze falls nötig neue Mappings oder Konfigurationsparameter im CLI (`src/bpauto/cli.py`).
+5. Schreibe Tests in `tests/`, idealerweise mit Mocking für API-Aufrufe, um Netzwerkabhängigkeiten zu vermeiden.
+6. Dokumentiere Besonderheiten oder zusätzliche Umgebungsvariablen im README.
 
-## Troubleshooting
+## Entwicklung & Tests
 
-- Bei UI-Änderungen der Webseite hilft `--debug`, um HTML-Auszüge zu erhalten.
-- Tritt ein Timeout auf, versucht das Skript bis zu drei Wiederholungen. Danach empfiehlt sich eine Pause, um mögliche Rate Limits zu umgehen.
-- Nicht erkannte PDF-Layouts können mit `PDFdump.py` analysiert und anschließend in `PDFScanner.py` ergänzt werden.
+```bash
+make format       # black/ruff Formatierung
+make lint         # Ruff Lints
+make test         # pytest + optionale Smoke-Tests
+```
 
-## Weiterentwicklung
+Das CLI kann lokal per Module-Run getestet werden:
 
-- Tests für PDF-Parsing und Excel-Schreiboperationen erweitern (`test_handelsregister.py`).
-- Unterstützung weiterer Dokumenttypen (neben AD) evaluieren.
-- Resilienz gegen UI-Änderungen durch robustere Selektoren und visuelle Prüfungen steigern.
+```bash
+python -m bpauto.cli --help
+```
 
+## Lizenz & Hinweise
+
+- Verwende `.artifacts/` für temporäre Downloads (wird automatisch ignoriert).
+- Sensible Schlüssel niemals ins Repo commiten – `.env` ist in `.gitignore` eingetragen.

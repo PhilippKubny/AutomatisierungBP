@@ -1,4 +1,4 @@
-.PHONY: venv install lint type test smoke run-example
+.PHONY: venv install install-dev lint type test smoke run-example format
 
 PYTHON ?= python3
 VENVDIR ?= .venv
@@ -14,19 +14,25 @@ venv:
 	$(PYTHON) -m venv $(VENVDIR)
 
 install: venv
-	$(PIP) install -e .[dev]
+        $(PIP) install -e .
+
+install-dev: venv
+        $(PIP) install -e .[dev]
+
+format:
+        $(PY) -m ruff format src tests
 
 lint:
-	$(PY) -m ruff check .
+        $(PY) -m ruff check .
 
 type:
-	$(PY) -m mypy src cli.py tests
+        $(PY) -m mypy src tests
 
 test:
 	$(PY) -m pytest -q
 
 smoke:
-	$(PY) -m tests.smoke_fetch
+        $(PY) -m tests.smoke_fetch
 
 run-example:
-	$(PY) cli.py --excel "Liste BP Cleaning Kreditoren.xlsx" --sheet "Tabelle1" --start 3 --name-col C
+        $(PY) -m bpauto.cli --excel "Liste BP Cleaning Kreditoren.xlsx" --sheet "Tabelle1" --start 3 --name-col C

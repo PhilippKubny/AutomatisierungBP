@@ -1,11 +1,7 @@
 line-length = 100
 target-version = "py310"
 exclude = [
-    "exel.py",
-    "PlayHandelsregister.py",
-    "PDFScanner.py",
     "PDFdump.py",
-    "test_handelsregister.py",
     "TestBP.xlsx",
     "README.pdf",
     "Liste BP Cleaning Kreditoren.xlsx",
@@ -20,4 +16,7 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-"tests/*" = ["ANN"]
+"tests/*" = ["ANN", "UP031"]
+"tests/test_handelsregister.py" = ["E501"]
+"src/bpauto/handelsregister.py" = ["ANN", "E501"]
+"src/bpauto/pdf_scanner.py" = ["ANN", "E501"]
