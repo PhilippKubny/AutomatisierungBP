@@ -1,0 +1,23 @@
+line-length = 100
+target-version = "py310"
+exclude = [
+    "exel.py",
+    "PlayHandelsregister.py",
+    "PDFScanner.py",
+    "PDFdump.py",
+    "test_handelsregister.py",
+    "TestBP.xlsx",
+    "README.pdf",
+    "Liste BP Cleaning Kreditoren.xlsx",
+]
+
+[lint]
+select = ["E", "F", "I", "B", "UP", "ANN"]
+ignore = [
+    "ANN101",
+    "ANN102",
+    "ANN401",
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["ANN"]

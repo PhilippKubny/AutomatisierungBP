@@ -15,11 +15,15 @@ dependencies = [
   "pydantic",
   "tenacity",
   "python-dotenv",
+  "pyyaml",
+  "typing-extensions",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest",
+  "ruff",
+  "mypy",
 ]
 
 [tool.hatch.build.targets.wheel]

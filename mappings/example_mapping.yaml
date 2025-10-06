@@ -1,10 +1,11 @@
-# Keys are CompanyRecord keys, values are Excel column letters
+# Zuordnung der CompanyRecord-Felder zu Excel-Spalten
 legal_name: W
 register_type: U
 register_no: V
 street: X
 zip: Y
 city: Z
+country: AC
 pdf_path: AA
 notes: AB
-country: AC
+source: AD
