@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Dict, Optional
 from urllib.parse import urlparse
@@ -17,7 +18,16 @@ from .base import CompanyRecord, Provider
 
 logger = logging.getLogger(__name__)
 
-_RETRYABLE_STATUS_CODES = {429, 500, 501, 502, 503, 504, 505}
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+_DEFAULT_TIMEOUT = (5.0, 30.0)
+
+
+def _slugify(value: str) -> str:
+    value = value.strip().lower()
+    value = re.sub(r"[^a-z0-9]+", "-", value)
+    value = re.sub(r"-+", "-", value)
+    return value.strip("-") or "northdata-document"
 
 
 class _RetryableRequestError(requests.RequestException):
@@ -35,7 +45,7 @@ class NorthDataProvider(Provider):
         *,
         download_ad: bool = False,
         download_dir: Optional[str] = None,
-        timeout: float = 15.0,
+        timeout: Optional[float] = None,
     ) -> None:
         self.api_key = api_key or os.getenv("NORTHDATA_API_KEY")
         if not self.api_key:
@@ -43,11 +53,19 @@ class NorthDataProvider(Provider):
 
         self._session_headers = {"X-Api-Key": self.api_key}
         self.download_ad = download_ad
-        self._download_dir = Path(download_dir) if download_dir else Path.cwd()
-        self._timeout = timeout
+        base_download_dir = Path(download_dir) if download_dir else Path.cwd()
+        self._download_dir = base_download_dir / ".artifacts" / "extracts"
+        if isinstance(timeout, (int, float)):
+            self._timeout = (float(timeout), _DEFAULT_TIMEOUT[1])
+        elif isinstance(timeout, (tuple, list)):
+            connect, *rest = list(timeout)
+            read = rest[0] if rest else _DEFAULT_TIMEOUT[1]
+            self._timeout = (float(connect), float(read))
+        else:
+            self._timeout = _DEFAULT_TIMEOUT
 
     def _should_retry(self, response: Response) -> bool:
-        return response.status_code in _RETRYABLE_STATUS_CODES or 500 <= response.status_code < 600
+        return response.status_code in _RETRYABLE_STATUS_CODES
 
     def _query_api(
         self,
@@ -64,8 +82,8 @@ class NorthDataProvider(Provider):
         logger.debug("Querying NorthData API with params: %s", params)
 
         @retry(
-            stop=stop_after_attempt(3),
-            wait=wait_exponential(multiplier=1, min=1, max=8),
+            stop=stop_after_attempt(5),
+            wait=wait_exponential(min=0.5, max=10),
             retry=retry_if_exception_type(_RetryableRequestError),
             reraise=True,
         )
@@ -80,6 +98,19 @@ class NorthDataProvider(Provider):
             except requests.RequestException as exc:  # pragma: no cover - network errors
                 logger.error("NorthData API request failed: %s", exc)
                 raise _RetryableRequestError(str(exc)) from exc
+
+            if response.status_code in {401, 403}:
+                logger.error(
+                    "NorthData API authentication failed with status %s", response.status_code
+                )
+                raise RuntimeError(
+                    "NorthData API key is invalid or expired (received status %s)"
+                    % response.status_code
+                )
+
+            if response.status_code == 404:
+                logger.warning("NorthData API returned no results (status 404)")
+                return {}
 
             if self._should_retry(response):
                 logger.warning(
@@ -100,6 +131,8 @@ class NorthDataProvider(Provider):
             if not response.content:
                 logger.debug("NorthData API response is empty")
                 return {}
+
+            logger.debug("NorthData API payload size: %d bytes", len(response.content))
 
             try:
                 return response.json()
@@ -158,7 +191,14 @@ class NorthDataProvider(Provider):
 
         return best_entry
 
-    def _download_pdf(self, url: str, target_dir: str) -> str:
+    def _download_pdf(
+        self,
+        url: str,
+        target_dir: Path,
+        *,
+        name: str,
+        register_no: Optional[str],
+    ) -> str:
         if not url:
             return ""
 
@@ -168,7 +208,11 @@ class NorthDataProvider(Provider):
         logger.debug("Downloading NorthData PDF from %s", url)
 
         try:
-            response = requests.get(url, headers=self._session_headers, timeout=self._timeout)
+            response = requests.get(
+                url,
+                headers=self._session_headers,
+                timeout=self._timeout,
+            )
         except requests.RequestException as exc:  # pragma: no cover - network errors
             logger.error("Failed to download PDF: %s", exc)
             return ""
@@ -180,8 +224,23 @@ class NorthDataProvider(Provider):
             return ""
 
         parsed = urlparse(url)
-        filename = os.path.basename(parsed.path) or "northdata_document.pdf"
-        file_path = target_path / filename
+        extension = os.path.splitext(os.path.basename(parsed.path))[1] or ".pdf"
+        slug_source = "-".join(
+            filter(
+                None,
+                [
+                    str(name).strip() if name else "",
+                    str(register_no).strip() if register_no else "",
+                ],
+            )
+        ) or str(name)
+        slug = _slugify(slug_source)
+
+        file_path = target_path / f"{slug}{extension}"
+        counter = 1
+        while file_path.exists():
+            file_path = target_path / f"{slug}-{counter}{extension}"
+            counter += 1
 
         try:
             file_path.write_bytes(response.content)
@@ -197,7 +256,7 @@ class NorthDataProvider(Provider):
         zip_code: Optional[str] = None,
         country: Optional[str] = None,
     ) -> CompanyRecord:
-        logger.debug(
+        logger.info(
             "Fetching NorthData record for name=%s, zip=%s, country=%s",
             name,
             zip_code,
@@ -205,15 +264,19 @@ class NorthDataProvider(Provider):
         )
         try:
             raw = self._query_api(name=name, zip_code=zip_code, country=country)
+        except RuntimeError:
+            raise
         except Exception as exc:  # pragma: no cover - defensive
             logger.exception("Error querying NorthData API: %s", exc)
             return CompanyRecord(legal_name=name, notes="error querying northdata", source="northdata_api")
 
         if not raw:
+            logger.warning("NorthData returned no result for name=%s, zip=%s", name, zip_code)
             return CompanyRecord(legal_name=name, notes="no result", source="northdata_api")
 
         payload = self._best_match(raw, name=name, zip_code=zip_code)
         if not payload:
+            logger.warning("NorthData returned no result for name=%s, zip=%s", name, zip_code)
             return CompanyRecord(legal_name=name, notes="no result", source="northdata_api")
 
         record: CompanyRecord = CompanyRecord(source="northdata_api")
@@ -268,7 +331,12 @@ class NorthDataProvider(Provider):
         pdf_path = ""
         if pdf_url:
             if self.download_ad:
-                pdf_path = self._download_pdf(pdf_url, str(self._download_dir))
+                pdf_path = self._download_pdf(
+                    pdf_url,
+                    self._download_dir,
+                    name=record.get("legal_name", name),
+                    register_no=record.get("register_no"),
+                )
             pdf_path = pdf_path or pdf_url
             record["pdf_path"] = pdf_path
 
