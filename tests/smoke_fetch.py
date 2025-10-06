@@ -9,7 +9,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from bpauto.providers import NorthDataProvider
+from bpauto.providers.northdata import NorthDataProvider
 
 
 def main() -> int:

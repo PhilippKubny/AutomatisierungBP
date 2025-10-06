@@ -17,7 +17,12 @@ dependencies = [
   "python-dotenv",
   "pyyaml",
   "typing-extensions",
+  "pandas",
+  "pdfplumber",
 ]
+
+[project.scripts]
+bpauto = "bpauto.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -27,7 +32,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/bpauto"]
+packages = ["bpauto"]
 
 [tool.hatch.metadata]
 allow-direct-references = true

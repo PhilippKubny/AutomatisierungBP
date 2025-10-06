@@ -11,10 +11,12 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
-from bpauto import excel_io
-from bpauto.providers import NorthDataProvider
+from . import excel_io
+from .providers.northdata import NorthDataProvider
+from .utils.logging_setup import setup_logger
 
-logger = logging.getLogger(__name__)
+_BASE_LOGGER = setup_logger()
+LOGGER = _BASE_LOGGER.getChild("cli")
 
 DEFAULT_MAPPING: dict[str, str] = {
     "legal_name": "W",
@@ -34,19 +36,11 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BP Automation NorthData Integration")
     parser.add_argument("--excel", required=True, help="Pfad zur Excel-Arbeitsmappe")
     parser.add_argument("--sheet", required=True, help="Tabellenblatt-Name")
-    parser.add_argument(
-        "--start", type=int, default=3, help="Startzeile (1-basiert). Standard: 3."
-    )
+    parser.add_argument("--start", type=int, default=3, help="Startzeile (1-basiert). Standard: 3.")
     parser.add_argument("--end", type=int, help="Endzeile (1-basiert, inklusiv)")
-    parser.add_argument(
-        "--name-col", default="C", help="Spalte mit Firmenname (Standard: C)"
-    )
-    parser.add_argument(
-        "--zip-col", default=None, help="Spalte mit Postleitzahl (optional)"
-    )
-    parser.add_argument(
-        "--country-col", default=None, help="Spalte mit Ländercode (optional)"
-    )
+    parser.add_argument("--name-col", default="C", help="Spalte mit Firmenname (Standard: C)")
+    parser.add_argument("--zip-col", default=None, help="Spalte mit Postleitzahl (optional)")
+    parser.add_argument("--country-col", default=None, help="Spalte mit Ländercode (optional)")
     parser.add_argument(
         "--mapping-yaml",
         help="YAML mit Mapping zwischen CompanyRecord-Feldern und Spalten",
@@ -70,7 +64,7 @@ def _parse_args() -> argparse.Namespace:
 
 def _configure_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
+    setup_logger(level=level)
 
 
 def _validate_column(column: str | None) -> str | None:
@@ -122,7 +116,7 @@ def main() -> int:
     mapping = _load_mapping(args.mapping_yaml)
 
     if args.source != "api":
-        logger.error("Unbekannte Quelle: %s", args.source)
+        LOGGER.error("Unbekannte Quelle: %s", args.source)
         return 2
 
     provider = NorthDataProvider(download_ad=args.download_ad)
@@ -136,22 +130,22 @@ def main() -> int:
     try:
         name_column = _validate_column(args.name_col)
     except ValueError as exc:
-        logger.error("%s", exc)
+        LOGGER.error("%s", exc)
         return 2
     if not name_column:
-        logger.error("Spalte für Firmennamen darf nicht leer sein")
+        LOGGER.error("Spalte für Firmennamen darf nicht leer sein")
         return 2
 
     try:
         zip_column = _validate_column(args.zip_col)
     except ValueError as exc:
-        logger.error("%s", exc)
+        LOGGER.error("%s", exc)
         return 2
 
     try:
         country_column = _validate_column(args.country_col)
     except ValueError as exc:
-        logger.error("%s", exc)
+        LOGGER.error("%s", exc)
         return 2
 
     rows = excel_io.iter_rows(
@@ -171,16 +165,16 @@ def main() -> int:
         country = row.get("country")
 
         if not name:
-            logger.debug("Überspringe Zeile %s ohne Firmennamen", row.get("index"))
+            LOGGER.debug("Überspringe Zeile %s ohne Firmennamen", row.get("index"))
             continue
 
         try:
             record = provider.fetch(name=name, zip_code=zip_code, country=country)
         except RuntimeError as exc:
-            logger.error("Abbruch wegen API-Fehler: %s", exc)
+            LOGGER.error("Abbruch wegen API-Fehler: %s", exc)
             return 3
         except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("Fehler bei der Abfrage für %s: %s", name, exc)
+            LOGGER.exception("Fehler bei der Abfrage für %s: %s", name, exc)
             errors += 1
             continue
 
@@ -203,7 +197,7 @@ def main() -> int:
         excel_io.save(args.excel)
 
     duration = time.perf_counter() - start_time
-    logger.info(
+    LOGGER.info(
         "Verarbeitung abgeschlossen: processed=%s hits=%s no_result=%s errors=%s duration=%.2fs",
         processed,
         hits,

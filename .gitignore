@@ -1,9 +1,10 @@
-.venv/
+pycache/
 __pycache__/
-*.py[cod]
+.venv/
+.env
+.artifacts/
+*.pyc
 *.pyo
+.DS_Store
 .mypy_cache/
 .pytest_cache/
-.artifacts/
-.env
-.DS_Store

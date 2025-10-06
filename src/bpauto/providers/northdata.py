@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import re
 from collections.abc import Iterable, Sequence
@@ -23,9 +22,11 @@ from tenacity import (
     wait_exponential,
 )
 
+from ..utils.logging_setup import setup_logger
 from .base import CompanyRecord, Provider
 
-logger = logging.getLogger(__name__)
+_BASE_LOGGER = setup_logger()
+LOGGER = _BASE_LOGGER.getChild("providers.northdata")
 
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _DEFAULT_TIMEOUT = (5.0, 30.0)
@@ -47,14 +48,14 @@ def _log_retry(retry_state: RetryCallState) -> None:
         stop = getattr(retry_obj, "stop", None)
         max_attempts = getattr(stop, "max_attempt_number", "?")
     if isinstance(exc, _RetryableRequestError):
-        logger.warning(
+        LOGGER.warning(
             "Retry NorthData API (Versuch %s/%s) nach Status %s",
             retry_state.attempt_number,
             max_attempts,
             exc.status_code,
         )
     else:  # pragma: no cover - rein defensiv
-        logger.warning(
+        LOGGER.warning(
             "Retry NorthData API (Versuch %s/%s) wegen %s",
             retry_state.attempt_number,
             max_attempts,
@@ -144,7 +145,7 @@ class NorthDataProvider(Provider):
             )
 
         if response.status_code == 404:
-            logger.info("NorthData API meldet: keine Ergebnisse (404)")
+            LOGGER.info("NorthData API meldet: keine Ergebnisse (404)")
             return {}
 
         if self._should_retry(response):
@@ -154,7 +155,7 @@ class NorthDataProvider(Provider):
             )
 
         if response.status_code >= 400:
-            logger.error(
+            LOGGER.error(
                 "NorthData API Fehler %s: %s",
                 response.status_code,
                 response.text,
@@ -172,7 +173,7 @@ class NorthDataProvider(Provider):
         if isinstance(payload, dict):
             return cast(dict[str, Any], payload)
 
-        logger.debug("JSON-Antwort hat unerwartetes Format: %s", type(payload))
+        LOGGER.debug("JSON-Antwort hat unerwartetes Format: %s", type(payload))
         return {}
 
     def _query_api(
@@ -187,19 +188,19 @@ class NorthDataProvider(Provider):
         if zip_code:
             params["postalCode"] = zip_code
 
-        logger.debug("Frage NorthData API mit Parametern: %s", params)
+        LOGGER.debug("Frage NorthData API mit Parametern: %s", params)
 
         try:
             return self._perform_request(params)
         except RetryError as exc:
             last_exc = exc.last_attempt.exception()
             if isinstance(last_exc, _RetryableRequestError):
-                logger.error(
+                LOGGER.error(
                     "NorthData API mehrfach fehlgeschlagen (Status %s)",
                     last_exc.status_code,
                 )
             else:
-                logger.error("NorthData API mehrfach fehlgeschlagen: %s", exc)
+                LOGGER.error("NorthData API mehrfach fehlgeschlagen: %s", exc)
             return {}
 
     @staticmethod
@@ -229,23 +230,21 @@ class NorthDataProvider(Provider):
         def _float_score(keys: Sequence[str]) -> float:
             for key in keys:
                 raw_score = entry.get(key)
-                if isinstance(raw_score, (float, int)):
+                if isinstance(raw_score, float | int):
                     return float(raw_score)
             return 0.0
 
         entry_name = entry.get("legalName") or entry.get("name")
         normalised_entry_name = self._normalise_name(entry_name)
         query_name_norm = self._normalise_name(query_name)
-        is_exact_match = bool(
-            query_name_norm and normalised_entry_name == query_name_norm
-        )
+        is_exact_match = bool(query_name_norm and normalised_entry_name == query_name_norm)
 
         entry_zip = (
             entry.get("postalCode")
             or entry.get("zip")
-            or (
-                entry.get("address", {}) if isinstance(entry.get("address"), dict) else {}
-            ).get("postalCode")
+            or (entry.get("address", {}) if isinstance(entry.get("address"), dict) else {}).get(
+                "postalCode"
+            )
         )
         zip_matches = bool(
             query_zip and entry_zip and str(entry_zip).strip() == str(query_zip).strip()
@@ -310,13 +309,11 @@ class NorthDataProvider(Provider):
                 timeout=self._timeout,
             )
         except requests.RequestException as exc:  # pragma: no cover - Netzwerkfehler
-            logger.error("PDF-Download fehlgeschlagen: %s", exc)
+            LOGGER.error("PDF-Download fehlgeschlagen: %s", exc)
             return ""
 
         if response.status_code != 200:
-            logger.warning(
-                "PDF-Download nicht möglich, Status %s", response.status_code
-            )
+            LOGGER.warning("PDF-Download nicht möglich, Status %s", response.status_code)
             return ""
 
         parsed = urlparse(url)
@@ -333,7 +330,7 @@ class NorthDataProvider(Provider):
         try:
             file_path.write_bytes(response.content)
         except OSError as exc:  # pragma: no cover - Dateisystemfehler
-            logger.error("PDF-Datei konnte nicht geschrieben werden: %s", exc)
+            LOGGER.error("PDF-Datei konnte nicht geschrieben werden: %s", exc)
             return ""
 
         return str(file_path)
@@ -360,7 +357,7 @@ class NorthDataProvider(Provider):
         zip_code: str | None = None,
         country: str | None = None,
     ) -> CompanyRecord:
-        logger.info(
+        LOGGER.info(
             "Rufe NorthData-Daten ab für name=%s zip=%s country=%s",
             name,
             zip_code,
@@ -371,7 +368,7 @@ class NorthDataProvider(Provider):
         except RuntimeError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("Fehler beim NorthData-Request: %s", exc)
+            LOGGER.exception("Fehler beim NorthData-Request: %s", exc)
             return CompanyRecord(
                 legal_name=name,
                 notes="fehler bei anfrage",
@@ -379,7 +376,7 @@ class NorthDataProvider(Provider):
             )
 
         if not raw:
-            logger.warning("NorthData: keine Daten für %s (%s)", name, zip_code)
+            LOGGER.warning("NorthData: keine Daten für %s (%s)", name, zip_code)
             return CompanyRecord(
                 legal_name=name,
                 notes="no result",
@@ -388,7 +385,7 @@ class NorthDataProvider(Provider):
 
         payload = self._best_match(raw, name=name, zip_code=zip_code)
         if not payload:
-            logger.warning("NorthData: keine verwertbaren Treffer für %s", name)
+            LOGGER.warning("NorthData: keine verwertbaren Treffer für %s", name)
             return CompanyRecord(
                 legal_name=name,
                 notes="no result",
@@ -398,10 +395,7 @@ class NorthDataProvider(Provider):
         record: CompanyRecord = CompanyRecord(source="northdata_api")
 
         legal_name = (
-            payload.get("legalName")
-            or payload.get("legal_name")
-            or payload.get("name")
-            or name
+            payload.get("legalName") or payload.get("legal_name") or payload.get("name") or name
         )
         record["legal_name"] = str(legal_name)
 
@@ -443,7 +437,7 @@ class NorthDataProvider(Provider):
         notes_parts: list[str] = []
         for score_key in ("score", "confidence", "matchScore"):
             score_val = payload.get(score_key)
-            if isinstance(score_val, (float, int)):
+            if isinstance(score_val, float | int):
                 notes_parts.append(f"confidence={float(score_val):.2f}")
                 break
 
@@ -452,9 +446,7 @@ class NorthDataProvider(Provider):
                 payload.get("postalCode")
                 or payload.get("zip")
                 or (
-                    payload.get("address", {})
-                    if isinstance(payload.get("address"), dict)
-                    else {}
+                    payload.get("address", {}) if isinstance(payload.get("address"), dict) else {}
                 ).get("postalCode")
             )
             if payload_zip:
