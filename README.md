@@ -1,114 +1,163 @@
-Idee: 
-	We imitate a human who's doing everything by hand. There is no API for handelsregister.de at this moment.
- 	In the following you can see the startpage of the website https://www.handelsregister.de/rp_web/welcome.xhtml. On there we click on the 'Advanced Search option' on the right side. 
-	<img width="1552" height="815" alt="image" src="https://github.com/user-attachments/assets/bf638fee-9e7c-4694-a3c7-42b1c53af508" />
- 	
-  After clicking we'll get the search form:
-  	<img width="1888" height="879" alt="image" src="https://github.com/user-attachments/assets/187c6a1d-77c1-4d06-90b7-793d9c721757" /><img width="1368" height="870" alt="image" src="https://github.com/user-attachments/assets/b223b4f7-c043-48a7-97fe-c69798511366" />
-	Depending on how you run the python script (more explained below, i.e -excel, -registernumber, -postal etc.) the respective fields will be filled. Mandatory to fill is the "Company or keywords" field. 
- Other than that, the script also allows to fill the "register number" and "postal code" field. In theory you could also change the "Search for records that" field by modifying the -mode parameter (I wouldn't recommend using it though, because the functions don't seem to be implemented very well on the website)
+# Handelsregister Automation Toolkit
 
-Lets try running a search (i.e Schwille Elektronik Produktions- und Vertriebs GmbH). After clicking on the "Find" button a list of Matching results will show up:
-<img width="1891" height="925" alt="image" src="https://github.com/user-attachments/assets/0fa0d58d-37c5-4bf5-a477-fa0cf77f4233" />
+AutomatisierungBP automatisiert die Recherche im deutschen Handelsregister und verarbeitet die Ergebnisse für interne Business-Partner-Prüfungen. Das Tool füllt Web-Formulare per Playwright, lädt amtliche Ausdrucke (AD-PDFs) herunter, extrahiert deren Inhalte und schreibt die Daten zurück in Excel-Tabellen.
 
+## Inhaltsverzeichnis
 
- If the company name combined with the optional parameters is unique we will only receive one result (will always be unique if we have the register number of the company). The python programm will only handle unique results.
- If there are multiple results it will be logged in the column "name1-4" (column 'T') how many results where found. 0 means there was no matching comany (either the company name was misspelled or is not registered in the handelsregister).
+- [Überblick](#überblick)
+- [Hauptfunktionen](#hauptfunktionen)
+- [Projektaufbau](#projektaufbau)
+- [Voraussetzungen](#voraussetzungen)
+- [Installation](#installation)
+- [Konfiguration](#konfiguration)
+- [Anwendung](#anwendung)
+  - [Stapelverarbeitung mit Excel](#stapelverarbeitung-mit-excel)
+  - [Einzelabfragen](#einzelabfragen)
+  - [Gemeinsame Argumente](#gemeinsame-argumente)
+- [Ausgabe und Ergebnisdateien](#ausgabe-und-ergebnisdateien)
+- [Troubleshooting](#troubleshooting)
+- [Weiterentwicklung](#weiterentwicklung)
 
-If the result is unique the script will download the AD file and save it to the BP folder in Downloads with the following format <internalSAPNumber_ComapanyName_DateOfDownload>:
-<img width="516" height="322" alt="image" src="https://github.com/user-attachments/assets/dffa6cf2-ce8c-4564-a8f0-d6190b53115d" />
+## Überblick
 
-There are 2 types of AD files in the Handelsregister:
-<img width="1188" height="901" alt="image" src="https://github.com/user-attachments/assets/e90d0952-e1b1-48ff-8794-c20756a89cda" /><img width="1128" height="895" alt="image" src="https://github.com/user-attachments/assets/0cc079eb-5b0c-4590-8d69-6dbf310e7a3d" />
+Das Skript `PlayHandelsregister.py` bildet die manuelle Recherche auf [handelsregister.de](https://www.handelsregister.de/rp_web/welcome.xhtml) nach. Es navigiert zur erweiterten Suche, setzt die übergebenen Parameter, lädt bei eindeutigen Treffern die AD-PDFs herunter und aktualisiert definierte Zellen einer Excel-Arbeitsmappe. Unterstützende Module kümmern sich um das Lesen/Schreiben der Excel-Datei (`exel.py`) sowie die Texterkennung aus AD-PDFs (`PDFScanner.py`).
 
-Depending on which format was used the script will perform a PDF scan to extract all the relevant information (Company name, register number, address). 
-If the AD file had an unexpected format it will show error in the excel column "name1-4"/'T' "Unexpected format"
+## Hauptfunktionen
 
-If everything worked it will write back all the information that was exctracted back to the excel file and continune with the next row. 
+- Automatisiertes Ausfüllen der erweiterten Suche im Handelsregister.
+- Verarbeitung von Excel-Tabellen zur Stapelprüfung mehrerer Unternehmen.
+- Optionaler Download der amtlichen Ausdrucke (AD) pro Treffer.
+- Auslesen relevanter Stammdaten (Firma, Registernummer, Adresse) aus AD-PDFs.
+- Rückschreiben der ermittelten Informationen in frei konfigurierbare Excel-Spalten.
+- Debug- und Wiederholungslogik zur Minimierung von Ausfällen durch UI-Änderungen oder Rate Limits.
 
+## Projektaufbau
 
+| Datei | Zweck |
+| --- | --- |
+| `PlayHandelsregister.py` | Zentrales CLI-Skript, steuert Playwright-Browser, Download und Excel-Update. |
+| `exel.py` | Hilfsfunktionen zum Lesen und Aktualisieren der Excel-Datei. |
+| `PDFScanner.py` | Erkennung relevanter Textpassagen in AD-PDFs und Strukturierung der Daten. |
+| `PDFdump.py` | Debugging-Werkzeug zum Analysieren neuer/abweichender PDF-Strukturen. |
+| `test_handelsregister.py` | Ausgangspunkt für automatisierte Tests (z. B. Parser/Scanner). |
 
+## Voraussetzungen
 
+- Python 3.11 oder neuer.
+- Google Chrome oder Microsoft Edge ist nicht erforderlich; Playwright bringt eigene Browser-Bundles mit.
+- Schreib-/Leserechte auf das Excel- und Download-Verzeichnis.
 
+## Installation
 
+1. Repository klonen oder als ZIP herunterladen.
+2. (Empfohlen) Virtuelle Umgebung anlegen.
+3. Abhängigkeiten installieren:
 
+   ```bash
+   pip install -r requirements.txt
+   playwright install
+   ```
 
+   Der zweite Befehl installiert die benötigten Browser-Binaries für Playwright.
 
+## Konfiguration
 
+### Excel-Vorbereitung
 
+- Das Tool erwartet eine Excel-Datei mit Kopfzeilen in den ersten beiden Zeilen. Standardmäßig beginnt die Verarbeitung ab Zeile 3.
+- Relevante Spalten können über CLI-Argumente konfiguriert werden. Standardwerte:
 
+  | Zweck | Standardspalte |
+  | --- | --- |
+  | SAP-Lieferantennummer | `A` |
+  | SAP-Kundennummer | `B` |
+  | Firmenname (Eingabe) | `C` |
+  | Land | `J` |
+  | Postleitzahl (Eingabe) | `I` |
+  | Registertyp (Ausgabe) | `V` |
+  | Registernummer (Ausgabe) | `U` |
+  | Dokumentpfad | `P` |
+  | Änderungsbedarf | `Q` |
+  | Datum letzte Prüfung | `S` |
+  | Ergebniszählung/Log (`name1-4`) | `T` |
+  | Adressdaten (Straße, Hausnummer, Stadt, PLZ) | `X`, `Y`, `Z`, `AA` |
 
+- Eigene Spaltenzuordnungen lassen sich über die entsprechenden `--*-col` Argumente anpassen.
 
+### Download-Verzeichnis
 
+- Ohne Angabe wird im Benutzerverzeichnis `~/Downloads/BP` angelegt.
+- Alternativ kann mit `--outdir` ein eigener Pfad gesetzt werden.
 
+## Anwendung
 
+Das CLI unterscheidet zwei Betriebsmodi: Stapelverarbeitung mit Excel (`--excel`) und Einzelabfragen. In beiden Fällen empfiehlt es sich, bei UI-Problemen den Debug-Modus zu aktivieren (`--debug`).
 
+### Stapelverarbeitung mit Excel
 
+```bash
+python PlayHandelsregister.py \
+  --excel "C:\\Users\\User\\Downloads\\TestBP.xlsx" \
+  --sheet "Tabelle1" \
+  --start 25 \
+  --end 30 \
+  --download-ad \
+  --postal \
+  --outdir "C:\\Users\\User\\Downloads\\BP" \
+  --debug
+```
 
+- `--start` und `--end` definieren den verarbeiteten Zeilenbereich (inklusiv).
+- `--postal` ergänzt die Suche um Postleitzahlen (falls in der Excel hinterlegt).
+- `--download-ad` speichert AD-PDFs für eindeutige Treffer.
+- Fehler wie Mehrfachtreffer oder nicht gefundene Firmen werden in der konfigurierten Ergebnis-Spalte protokolliert.
 
+### Einzelabfragen
 
+```bash
+python PlayHandelsregister.py \
+  --schlagwoerter "THYSSENKRUPP SCHULTE GMBH" \
+  --register-number "26718" \
+  --sap-number "2203241" \
+  --row-number "352" \
+  --download-ad \
+  --postal \
+  --outdir "C:\\Users\\User\\Downloads\\BP"
+```
 
+- `--schlagwoerter` ist Pflicht (Firmenname bzw. Stichworte).
+- `--sap-number` und `--row-number` dienen zur Zuordnung in der Excel-Datei und sind im Einzelmodus erforderlich.
+- `--register-number` erhöht die Treffergenauigkeit, ist aber optional.
 
+### Gemeinsame Argumente
 
+| Argument | Beschreibung |
+| --- | --- |
+| `-d`, `--debug` | Zusätzliche Konsolenausgaben für Fehlersuche. |
+| `--headful` | Öffnet den Browser sichtbar (Standard: headless). |
+| `--schlagwortOptionen {all,min,exact}` | Steuerung der Suchlogik (alle Stichworte, mindestens eines, exakte Übereinstimmung). |
+| `--postal` | Aktiviert Postleitzahl-Suche (setzt voraus, dass ein Wert vorliegt). |
+| `--download-ad` | Lädt AD-PDFs in das Ausgabeverzeichnis. |
+| `--outdir PATH` | Zielordner für Downloads und Prüfdateien. |
+| `--start/--end` | Zeilenbereich bei Excel-Stapelverarbeitung. |
 
+Eine vollständige Auflistung aller Argumente liefert `python PlayHandelsregister.py --help`.
 
+## Ausgabe und Ergebnisdateien
 
+- **AD-PDFs** werden als `<SAP- oder interner Schlüssel>_<Firmenname>_<YYYY-MM-DD>.pdf` im gewählten Ausgabeverzeichnis gespeichert.
+- **Excel-Updates**: Bei eindeutigen Treffern aktualisiert das Skript Name, Adresse, Registernummer, Registertyp, Downloadpfad sowie Status- und Datumsfelder.
+- **Protokollierung**: Mehrfachtreffer oder Fehlermeldungen werden in der Ergebnis-Spalte (Standard `T`) mitgezählt bzw. beschrieben (`Unexpected format`, `0` für keine Treffer etc.).
 
+## Troubleshooting
 
+- Bei UI-Änderungen der Webseite hilft `--debug`, um HTML-Auszüge zu erhalten.
+- Tritt ein Timeout auf, versucht das Skript bis zu drei Wiederholungen. Danach empfiehlt sich eine Pause, um mögliche Rate Limits zu umgehen.
+- Nicht erkannte PDF-Layouts können mit `PDFdump.py` analysiert und anschließend in `PDFScanner.py` ergänzt werden.
 
+## Weiterentwicklung
 
-
-
-
-
-
-
-
-
-
-Ignore -schlagwortOptionen (don't need)
-
-excel.py has everything to do with excel. Extracting information and writing back information. 
-PDFScanner.py is for scanning downloaded AD files (only supports AD files so far)
-PDFdump.py is only for debugging and figuring out the structure of a PDF to then implement a scanner in PDFScanner
-PlayHandelsregister.py is the main that automates everything. First, it's inputting extracted information into the search form, then it performs the search, downloads the document, scans the document and lastly writes back to the excel file. 
-
-2 Options to run the PlayHandelsregister
-1. batch running with Excel table.
-   
-    i.e python PlayHandelsregister.py -d --download-ad --excel "C:\Users\User\Downloads\TestBP.xlsx" --sheet "Tabelle1" --start 25 --end 30 -postal --outdir "C:\Users\User\Downloads\BP"
-   
-   -d is for debugging (more information)
-   
-   --download-ad is for downloading the AD file (if not mentioned, it will only perform the search without downloading the document)
-   
-   --excel "<Excelpath>" tells the Excel path (required in batch running mode (it's the keyword to run the batch function in the first place))
-   
-   --sheet "<Table>" is to specify the table you want to use in the excel file
-   
-   --start <int> is to specify the start row to beginn performing the automation (it correlates 1 to 1 with the excel rows, that means, i.e 3 will start the automation from row 3 in the excel file, default is 3 since the first 2 rows are headers in the excel file)
-   
-   --end <int> same as --start (start and end are included -> start 3 end 5 are 3 rows of scanning), this is required in the batch running mode
-   
-   -postal is optional if wanting to run the search with the postal code included (potentially higher hit rate if the register number is not given in the excel file)
-   
-   -outdir "" specifies the directory where all the AD PDF are downloaded to (if not given it will automatically create a folder in Downloads named "BP"
-   
-
-
-3. run in singel shot mode, this is complementory to the batch mode for singel entries
-   
-   i.e python PlayHandelsregister.py -s "THYSSENKRUPP SCHULTE GMBH"  --register-number "26718" -d --download-ad -postal --outdir "C:\Users\User\Downloads\BP" -sap "2203241" -row "352"
-   
-   in single-shot mode (occurs automatically if -excel is not given) -s, -sap, -row are mandatory
-   
-   -s stands for schlagwoerter and correlates to the company name
-   
-   --regist-number is optional if you know the register number in the handelsregisterbuch
-   
-   -sap is the number we give internally in MTU can be read of the excel sheet
-   
-   -row correlates to the companies row in the excel sheet (so that the information can be updated in the excel sheet)
-
-
+- Tests für PDF-Parsing und Excel-Schreiboperationen erweitern (`test_handelsregister.py`).
+- Unterstützung weiterer Dokumenttypen (neben AD) evaluieren.
+- Resilienz gegen UI-Änderungen durch robustere Selektoren und visuelle Prüfungen steigern.
 
