@@ -1,0 +1,10 @@
+# Keys are CompanyRecord keys, values are Excel column letters
+legal_name: W
+register_type: U
+register_no: V
+street: X
+zip: Y
+city: Z
+pdf_path: AA
+notes: AB
+country: AC
