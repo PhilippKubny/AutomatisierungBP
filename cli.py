@@ -15,14 +15,14 @@ from bpauto.providers.northdata import NorthDataProvider
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAPPING: Dict[str, str] = {
-    "legal_name": "K",
-    "street": "L",
-    "zip": "M",
-    "city": "N",
-    "country": "O",
     "register_type": "U",
     "register_no": "V",
-    "notes": "W",
+    "legal_name": "W",
+    "street": "X",
+    "zip": "Y",
+    "city": "Z",
+    "pdf_path": "AA",
+    "notes": "AB",
 }
 
 
@@ -30,11 +30,20 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BP Automation NorthData integration")
     parser.add_argument("--excel", required=True, help="Path to the Excel workbook")
     parser.add_argument("--sheet", required=True, help="Worksheet name")
-    parser.add_argument("--start", type=int, required=True, help="Start row index (1-based)")
+    parser.add_argument(
+        "--start",
+        type=int,
+        default=3,
+        help="Start row index (1-based). Defaults to 3.",
+    )
     parser.add_argument("--end", type=int, help="End row index (1-based, inclusive)")
     parser.add_argument("--name-col", default="C", help="Column letter containing the company name")
-    parser.add_argument("--zip-col", help="Column letter containing the ZIP code")
-    parser.add_argument("--country-col", help="Column letter containing the country")
+    parser.add_argument("--zip-col", default=None, help="Column letter containing the ZIP code")
+    parser.add_argument(
+        "--country-col",
+        default=None,
+        help="Column letter containing the country",
+    )
     parser.add_argument(
         "--mapping-yaml",
         help="YAML file mapping CompanyRecord fields to Excel column letters",
@@ -56,7 +65,7 @@ def _configure_logging(verbose: bool) -> None:
 
 def _load_mapping(path: Optional[str]) -> Dict[str, str]:
     if not path:
-        return DEFAULT_MAPPING
+        return dict(DEFAULT_MAPPING)
 
     mapping_path = Path(path)
     if not mapping_path.exists():
@@ -69,13 +78,14 @@ def _load_mapping(path: Optional[str]) -> Dict[str, str]:
 
     content = mapping_path.read_text(encoding="utf-8")
     if not content.strip():
-        return DEFAULT_MAPPING
+        return dict(DEFAULT_MAPPING)
 
     if yaml:
         data = yaml.safe_load(content)  # type: ignore[attr-defined]
         if not isinstance(data, dict):
             raise ValueError("Mapping YAML must contain a dictionary")
-        return {str(k): str(v) for k, v in data.items()}
+        normalised = {str(k): str(v) for k, v in data.items()}
+        return {**DEFAULT_MAPPING, **normalised}
 
     # Minimal fallback parser for simple key: value lines
     mapping: Dict[str, str] = {}
@@ -86,20 +96,26 @@ def _load_mapping(path: Optional[str]) -> Dict[str, str]:
             continue
         key, value = line.split(":", 1)
         mapping[key.strip()] = value.strip()
-    return mapping or DEFAULT_MAPPING
+    return {**DEFAULT_MAPPING, **mapping} if mapping else dict(DEFAULT_MAPPING)
 
 
 def main() -> int:
     args = _parse_args()
     _configure_logging(args.verbose)
-    load_dotenv()
+    dotenv_path = Path(".env")
+    if dotenv_path.exists():
+        load_dotenv(str(dotenv_path))
 
     mapping = _load_mapping(args.mapping_yaml)
 
     if args.source != "api":
         raise ValueError(f"Unsupported source: {args.source}")
 
-    provider = NorthDataProvider()
+    provider = NorthDataProvider(download_ad=args.download_ad)
+
+    processed = 0
+    success = 0
+    no_result = 0
 
     for row in excel_io.iter_rows(
         excel_path=args.excel,
@@ -115,6 +131,8 @@ def main() -> int:
             logger.debug("Skipping row %s: no company name", row["index"])
             continue
 
+        processed += 1
+
         try:
             record = provider.fetch(
                 name=name,
@@ -125,8 +143,11 @@ def main() -> int:
             logger.error("Failed to fetch record for %s: %s", name, exc)
             continue
 
-        if args.download_ad:
-            logger.debug("Download flag set for row %s; functionality pending.", row["index"])
+        notes_value = (record.get("notes") or "").strip().lower()
+        if notes_value == "no result":
+            no_result += 1
+        else:
+            success += 1
 
         excel_io.write_result(
             excel_path=args.excel,
@@ -137,6 +158,13 @@ def main() -> int:
         )
 
     excel_io.save(args.excel)
+
+    logger.info(
+        "Processing summary: processed=%s, success=%s, no_result=%s",
+        processed,
+        success,
+        no_result,
+    )
     return 0
 
 
