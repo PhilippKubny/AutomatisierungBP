@@ -2,25 +2,64 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import requests
 from requests import Response
-from tenacity import (RetryError, retry, retry_if_exception_type,
-                      stop_after_attempt, wait_exponential)
+from tenacity import (
+    RetryCallState,
+    RetryError,
+    Retrying,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from .base import CompanyRecord, Provider
 
 logger = logging.getLogger(__name__)
 
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-
 _DEFAULT_TIMEOUT = (5.0, 30.0)
+
+
+class _RetryableRequestError(RuntimeError):
+    """Error raised for retryable HTTP status codes."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _log_retry(retry_state: RetryCallState) -> None:
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    retry_obj = retry_state.retry_object
+    max_attempts = "?"
+    if isinstance(retry_obj, Retrying):
+        stop = getattr(retry_obj, "stop", None)
+        max_attempts = getattr(stop, "max_attempt_number", "?")
+    if isinstance(exc, _RetryableRequestError):
+        logger.warning(
+            "Retry NorthData API (Versuch %s/%s) nach Status %s",
+            retry_state.attempt_number,
+            max_attempts,
+            exc.status_code,
+        )
+    else:  # pragma: no cover - rein defensiv
+        logger.warning(
+            "Retry NorthData API (Versuch %s/%s) wegen %s",
+            retry_state.attempt_number,
+            max_attempts,
+            exc,
+        )
 
 
 def _slugify(value: str) -> str:
@@ -30,8 +69,13 @@ def _slugify(value: str) -> str:
     return value.strip("-") or "northdata-document"
 
 
-class _RetryableRequestError(requests.RequestException):
-    """Error raised for retryable HTTP status codes."""
+@dataclass(frozen=True)
+class _Candidate:
+    index: int
+    payload: dict[str, Any]
+    is_exact_match: bool
+    zip_matches: bool
+    score: float
 
 
 class NorthDataProvider(Provider):
@@ -41,155 +85,211 @@ class NorthDataProvider(Provider):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         *,
         download_ad: bool = False,
-        download_dir: Optional[str] = None,
-        timeout: Optional[float] = None,
+        download_dir: str | None = None,
+        timeout: Sequence[float] | None = None,
     ) -> None:
         self.api_key = api_key or os.getenv("NORTHDATA_API_KEY")
         if not self.api_key:
-            raise RuntimeError("NORTHDATA_API_KEY environment variable is required")
+            raise RuntimeError(
+                "NORTHDATA_API_KEY muss gesetzt sein (Umgebungsvariable oder Parameter)."
+            )
 
         self._session_headers = {"X-Api-Key": self.api_key}
         self.download_ad = download_ad
         base_download_dir = Path(download_dir) if download_dir else Path.cwd()
         self._download_dir = base_download_dir / ".artifacts" / "extracts"
-        if isinstance(timeout, (int, float)):
-            self._timeout = (float(timeout), _DEFAULT_TIMEOUT[1])
-        elif isinstance(timeout, (tuple, list)):
-            connect, *rest = list(timeout)
-            read = rest[0] if rest else _DEFAULT_TIMEOUT[1]
-            self._timeout = (float(connect), float(read))
-        else:
+
+        if timeout is None:
             self._timeout = _DEFAULT_TIMEOUT
+        elif len(timeout) == 1:
+            self._timeout = (float(timeout[0]), _DEFAULT_TIMEOUT[1])
+        else:
+            connect, read = float(timeout[0]), float(timeout[1])
+            self._timeout = (connect, read)
 
     def _should_retry(self, response: Response) -> bool:
         return response.status_code in _RETRYABLE_STATUS_CODES
 
+    def _perform_request(self, params: dict[str, str]) -> dict[str, Any]:
+        retrying = Retrying(
+            stop=stop_after_attempt(5),
+            wait=wait_exponential(multiplier=0.5, min=0.5, max=10),
+            retry=retry_if_exception_type(_RetryableRequestError),
+            reraise=True,
+            after=_log_retry,
+        )
+
+        for attempt in retrying:
+            with attempt:
+                return self._perform_request_once(params)
+        return {}
+
+    def _perform_request_once(self, params: dict[str, str]) -> dict[str, Any]:
+        try:
+            response = requests.get(
+                self.base_url,
+                params=params,
+                headers=self._session_headers,
+                timeout=self._timeout,
+            )
+        except requests.RequestException as exc:  # pragma: no cover - Netzwerkfehler
+            raise _RetryableRequestError(str(exc)) from exc
+
+        if response.status_code in {401, 403}:
+            raise RuntimeError(
+                f"NorthData API Key ungültig oder fehlend (HTTP {response.status_code})."
+            )
+
+        if response.status_code == 404:
+            logger.info("NorthData API meldet: keine Ergebnisse (404)")
+            return {}
+
+        if self._should_retry(response):
+            raise _RetryableRequestError(
+                f"Retryable status code: {response.status_code}",
+                status_code=response.status_code,
+            )
+
+        if response.status_code >= 400:
+            logger.error(
+                "NorthData API Fehler %s: %s",
+                response.status_code,
+                response.text,
+            )
+            response.raise_for_status()
+
+        if not response.content:
+            return {}
+
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as exc:
+            raise _RetryableRequestError("Ungültige JSON-Antwort") from exc
+
+        if isinstance(payload, dict):
+            return cast(dict[str, Any], payload)
+
+        logger.debug("JSON-Antwort hat unerwartetes Format: %s", type(payload))
+        return {}
+
     def _query_api(
         self,
         name: str,
-        zip_code: Optional[str] = None,
-        country: Optional[str] = None,
-    ) -> Dict[str, object]:
-        params: Dict[str, str] = {"query": name}
+        zip_code: str | None = None,
+        country: str | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, str] = {"query": name}
         if country:
             params["country"] = country
         if zip_code:
             params["postalCode"] = zip_code
 
-        logger.debug("Querying NorthData API with params: %s", params)
-
-        @retry(
-            stop=stop_after_attempt(5),
-            wait=wait_exponential(min=0.5, max=10),
-            retry=retry_if_exception_type(_RetryableRequestError),
-            reraise=True,
-        )
-        def _perform_request() -> Dict[str, object]:
-            try:
-                response = requests.get(
-                    self.base_url,
-                    params=params,
-                    headers=self._session_headers,
-                    timeout=self._timeout,
-                )
-            except requests.RequestException as exc:  # pragma: no cover - network errors
-                logger.error("NorthData API request failed: %s", exc)
-                raise _RetryableRequestError(str(exc)) from exc
-
-            if response.status_code in {401, 403}:
-                logger.error(
-                    "NorthData API authentication failed with status %s", response.status_code
-                )
-                raise RuntimeError(
-                    "NorthData API key is invalid or expired (received status %s)"
-                    % response.status_code
-                )
-
-            if response.status_code == 404:
-                logger.warning("NorthData API returned no results (status 404)")
-                return {}
-
-            if self._should_retry(response):
-                logger.warning(
-                    "NorthData API returned retryable status %s", response.status_code
-                )
-                raise _RetryableRequestError(
-                    f"Retryable status code: {response.status_code}"
-                )
-
-            if response.status_code >= 400:
-                logger.error(
-                    "NorthData API returned error %s: %s",
-                    response.status_code,
-                    response.text,
-                )
-                response.raise_for_status()
-
-            if not response.content:
-                logger.debug("NorthData API response is empty")
-                return {}
-
-            logger.debug("NorthData API payload size: %d bytes", len(response.content))
-
-            try:
-                return response.json()
-            except ValueError as exc:  # pragma: no cover - depends on API response
-                logger.error("Invalid JSON from NorthData API: %s", exc)
-                raise _RetryableRequestError("Invalid JSON response") from exc
+        logger.debug("Frage NorthData API mit Parametern: %s", params)
 
         try:
-            return _perform_request()
-        except RetryError as exc:  # pragma: no cover - network heavy
-            logger.error("NorthData API request failed after retries: %s", exc)
+            return self._perform_request(params)
+        except RetryError as exc:
+            last_exc = exc.last_attempt.exception()
+            if isinstance(last_exc, _RetryableRequestError):
+                logger.error(
+                    "NorthData API mehrfach fehlgeschlagen (Status %s)",
+                    last_exc.status_code,
+                )
+            else:
+                logger.error("NorthData API mehrfach fehlgeschlagen: %s", exc)
             return {}
+
+    @staticmethod
+    def _extract_results(raw: dict[str, Any]) -> Iterable[dict[str, Any]]:
+        for key in ("result", "results", "hits", "data"):
+            value = raw.get(key)
+            if isinstance(value, list):
+                yield from (entry for entry in value if isinstance(entry, dict))
+                return
+        if raw:
+            yield raw
+
+    @staticmethod
+    def _normalise_name(value: str | None) -> str | None:
+        if value is None:
+            return None
+        return str(value).strip().casefold() or None
+
+    def _candidate_from_entry(
+        self,
+        entry: dict[str, Any],
+        *,
+        query_name: str,
+        query_zip: str | None,
+        index: int,
+    ) -> _Candidate:
+        def _float_score(keys: Sequence[str]) -> float:
+            for key in keys:
+                raw_score = entry.get(key)
+                if isinstance(raw_score, (float, int)):
+                    return float(raw_score)
+            return 0.0
+
+        entry_name = entry.get("legalName") or entry.get("name")
+        normalised_entry_name = self._normalise_name(entry_name)
+        query_name_norm = self._normalise_name(query_name)
+        is_exact_match = bool(
+            query_name_norm and normalised_entry_name == query_name_norm
+        )
+
+        entry_zip = (
+            entry.get("postalCode")
+            or entry.get("zip")
+            or (
+                entry.get("address", {}) if isinstance(entry.get("address"), dict) else {}
+            ).get("postalCode")
+        )
+        zip_matches = bool(
+            query_zip and entry_zip and str(entry_zip).strip() == str(query_zip).strip()
+        )
+
+        score = _float_score(["score", "confidence", "matchScore"])
+        return _Candidate(
+            index=index,
+            payload=entry,
+            is_exact_match=is_exact_match,
+            zip_matches=zip_matches,
+            score=score,
+        )
 
     def _best_match(
         self,
-        raw: Dict[str, object],
+        raw: dict[str, Any],
         name: str,
-        zip_code: Optional[str] = None,
-    ) -> Dict[str, object]:
-        results = []
-        if isinstance(raw, dict):
-            for key in ("result", "results", "hits", "data"):
-                value = raw.get(key) if isinstance(raw.get(key), list) else None
-                if value:
-                    results = value
-                    break
-
-        best_entry: Dict[str, object] = {}
-        best_score_tuple = (-1.0, -1.0)  # (zip_match, score)
-
-        for entry in results:
-            if not isinstance(entry, dict):
-                continue
-
-            score = 0.0
-            for score_key in ("score", "confidence", "matchScore"):
-                raw_score = entry.get(score_key)
-                if isinstance(raw_score, (float, int)):
-                    score = float(raw_score)
-                    break
-
-            entry_zip = (
-                entry.get("postalCode")
-                or entry.get("zip")
-                or (entry.get("address", {}) if isinstance(entry.get("address"), dict) else {}).get("postalCode")
+        zip_code: str | None = None,
+    ) -> dict[str, Any] | None:
+        candidates: list[_Candidate] = []
+        for idx, entry in enumerate(self._extract_results(raw)):
+            candidates.append(
+                self._candidate_from_entry(
+                    entry,
+                    query_name=name,
+                    query_zip=zip_code,
+                    index=idx,
+                )
             )
-            zip_match = 1.0 if zip_code and entry_zip and str(entry_zip) == str(zip_code) else 0.0
 
-            candidate_tuple = (zip_match, score)
-            if candidate_tuple > best_score_tuple:
-                best_entry = entry
-                best_score_tuple = candidate_tuple
+        if not candidates:
+            return None
 
-        if not best_entry and isinstance(raw, dict):
-            best_entry = raw
+        if zip_code:
+            zip_matches = [c for c in candidates if c.zip_matches]
+            if zip_matches:
+                candidates = zip_matches
 
-        return best_entry
+        exact_matches = [c for c in candidates if c.is_exact_match]
+        pool = exact_matches or candidates
+
+        best = max(pool, key=lambda c: (c.score, -c.index))
+        return best.payload
 
     def _download_pdf(
         self,
@@ -197,67 +297,71 @@ class NorthDataProvider(Provider):
         target_dir: Path,
         *,
         name: str,
-        register_no: Optional[str],
+        register_no: str | None,
     ) -> str:
         if not url:
             return ""
 
-        target_path = Path(target_dir)
-        target_path.mkdir(parents=True, exist_ok=True)
-
-        logger.debug("Downloading NorthData PDF from %s", url)
-
+        target_dir.mkdir(parents=True, exist_ok=True)
         try:
             response = requests.get(
                 url,
                 headers=self._session_headers,
                 timeout=self._timeout,
             )
-        except requests.RequestException as exc:  # pragma: no cover - network errors
-            logger.error("Failed to download PDF: %s", exc)
+        except requests.RequestException as exc:  # pragma: no cover - Netzwerkfehler
+            logger.error("PDF-Download fehlgeschlagen: %s", exc)
             return ""
 
         if response.status_code != 200:
             logger.warning(
-                "Unable to download PDF, status %s", response.status_code
+                "PDF-Download nicht möglich, Status %s", response.status_code
             )
             return ""
 
         parsed = urlparse(url)
         extension = os.path.splitext(os.path.basename(parsed.path))[1] or ".pdf"
-        slug_source = "-".join(
-            filter(
-                None,
-                [
-                    str(name).strip() if name else "",
-                    str(register_no).strip() if register_no else "",
-                ],
-            )
-        ) or str(name)
+        slug_source = "-".join(filter(None, [name, register_no or ""])) or name
         slug = _slugify(slug_source)
 
-        file_path = target_path / f"{slug}{extension}"
+        file_path = target_dir / f"{slug}{extension}"
         counter = 1
         while file_path.exists():
-            file_path = target_path / f"{slug}-{counter}{extension}"
+            file_path = target_dir / f"{slug}-{counter}{extension}"
             counter += 1
 
         try:
             file_path.write_bytes(response.content)
-        except OSError as exc:  # pragma: no cover - filesystem errors
-            logger.error("Failed to write PDF file: %s", exc)
+        except OSError as exc:  # pragma: no cover - Dateisystemfehler
+            logger.error("PDF-Datei konnte nicht geschrieben werden: %s", exc)
             return ""
 
         return str(file_path)
 
+    def _normalise_address(self, payload: dict[str, Any]) -> dict[str, Any]:
+        address_raw = payload.get("address")
+        if isinstance(address_raw, dict):
+            return {
+                "street": address_raw.get("street") or address_raw.get("streetName"),
+                "zip": address_raw.get("zip") or address_raw.get("postalCode"),
+                "city": address_raw.get("city"),
+                "country": address_raw.get("country"),
+            }
+        return {
+            "street": payload.get("street"),
+            "zip": payload.get("zip") or payload.get("postalCode"),
+            "city": payload.get("city"),
+            "country": payload.get("country"),
+        }
+
     def fetch(
         self,
         name: str,
-        zip_code: Optional[str] = None,
-        country: Optional[str] = None,
+        zip_code: str | None = None,
+        country: str | None = None,
     ) -> CompanyRecord:
         logger.info(
-            "Fetching NorthData record for name=%s, zip=%s, country=%s",
+            "Rufe NorthData-Daten ab für name=%s zip=%s country=%s",
             name,
             zip_code,
             country,
@@ -267,55 +371,53 @@ class NorthDataProvider(Provider):
         except RuntimeError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("Error querying NorthData API: %s", exc)
-            return CompanyRecord(legal_name=name, notes="error querying northdata", source="northdata_api")
+            logger.exception("Fehler beim NorthData-Request: %s", exc)
+            return CompanyRecord(
+                legal_name=name,
+                notes="fehler bei anfrage",
+                source="northdata_api",
+            )
 
         if not raw:
-            logger.warning("NorthData returned no result for name=%s, zip=%s", name, zip_code)
-            return CompanyRecord(legal_name=name, notes="no result", source="northdata_api")
+            logger.warning("NorthData: keine Daten für %s (%s)", name, zip_code)
+            return CompanyRecord(
+                legal_name=name,
+                notes="no result",
+                source="northdata_api",
+            )
 
         payload = self._best_match(raw, name=name, zip_code=zip_code)
         if not payload:
-            logger.warning("NorthData returned no result for name=%s, zip=%s", name, zip_code)
-            return CompanyRecord(legal_name=name, notes="no result", source="northdata_api")
+            logger.warning("NorthData: keine verwertbaren Treffer für %s", name)
+            return CompanyRecord(
+                legal_name=name,
+                notes="no result",
+                source="northdata_api",
+            )
 
         record: CompanyRecord = CompanyRecord(source="northdata_api")
 
-        legal_name = payload.get("legal_name") or payload.get("name") or name
+        legal_name = (
+            payload.get("legalName")
+            or payload.get("legal_name")
+            or payload.get("name")
+            or name
+        )
         record["legal_name"] = str(legal_name)
 
-        register = payload.get("register") if isinstance(payload.get("register"), dict) else {}
-        if register:
-            reg_type = register.get("type") or register.get("registerType")
-            reg_no = register.get("number") or register.get("registerNumber")
-            if reg_type:
-                record["register_type"] = str(reg_type)
-            if reg_no:
-                record["register_no"] = str(reg_no)
+        register_info = payload.get("register")
+        if isinstance(register_info, dict):
+            reg_type = register_info.get("type") or register_info.get("registerType")
+            reg_no = register_info.get("number") or register_info.get("registerNumber")
         else:
             reg_type = payload.get("registerType")
             reg_no = payload.get("registerNumber")
-            if reg_type:
-                record["register_type"] = str(reg_type)
-            if reg_no:
-                record["register_no"] = str(reg_no)
+        if reg_type:
+            record["register_type"] = str(reg_type)
+        if reg_no:
+            record["register_no"] = str(reg_no)
 
-        address = payload.get("address") if isinstance(payload.get("address"), dict) else {}
-        if not address:
-            address = {
-                "street": payload.get("street"),
-                "zip": payload.get("zip") or payload.get("postalCode"),
-                "city": payload.get("city"),
-                "country": payload.get("country"),
-            }
-        else:
-            address = {
-                "street": address.get("street") or address.get("streetName"),
-                "zip": address.get("zip") or address.get("postalCode"),
-                "city": address.get("city"),
-                "country": address.get("country"),
-            }
-
+        address = self._normalise_address(payload)
         for field in ("street", "zip", "city", "country"):
             value = address.get(field)
             if value:
@@ -327,9 +429,8 @@ class NorthDataProvider(Provider):
             or payload.get("pdf")
             or payload.get("pdfUrl")
         )
-
         pdf_path = ""
-        if pdf_url:
+        if isinstance(pdf_url, str) and pdf_url:
             if self.download_ad:
                 pdf_path = self._download_pdf(
                     pdf_url,
@@ -337,27 +438,33 @@ class NorthDataProvider(Provider):
                     name=record.get("legal_name", name),
                     register_no=record.get("register_no"),
                 )
-            pdf_path = pdf_path or pdf_url
-            record["pdf_path"] = pdf_path
+            record["pdf_path"] = pdf_path or pdf_url
 
-        notes_parts = []
+        notes_parts: list[str] = []
         for score_key in ("score", "confidence", "matchScore"):
             score_val = payload.get(score_key)
             if isinstance(score_val, (float, int)):
-                notes_parts.append(f"confidence={score_val:.2f}")
+                notes_parts.append(f"confidence={float(score_val):.2f}")
                 break
 
         if zip_code:
             payload_zip = (
                 payload.get("postalCode")
                 or payload.get("zip")
-                or (payload.get("address", {}) if isinstance(payload.get("address"), dict) else {}).get("postalCode")
+                or (
+                    payload.get("address", {})
+                    if isinstance(payload.get("address"), dict)
+                    else {}
+                ).get("postalCode")
             )
             if payload_zip:
-                match_status = "matched" if str(payload_zip) == str(zip_code) else "mismatched"
+                match_status = (
+                    "matched" if str(payload_zip).strip() == str(zip_code).strip() else "mismatched"
+                )
                 notes_parts.append(f"zip_{match_status}={payload_zip}")
 
-        if notes_parts:
-            record["notes"] = ", ".join(notes_parts)
+        if not notes_parts:
+            notes_parts.append("fetched")
 
+        record["notes"] = ", ".join(notes_parts)
         return record

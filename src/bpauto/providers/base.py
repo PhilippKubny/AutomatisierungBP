@@ -1,6 +1,6 @@
 """Provider base interfaces and shared types."""
 
-from typing import Optional, Protocol, TypedDict
+from typing import Protocol, TypedDict
 
 
 class CompanyRecord(TypedDict, total=False):
@@ -11,7 +11,7 @@ class CompanyRecord(TypedDict, total=False):
     zip: str
     city: str
     country: str
-    pdf_path: Optional[str]
+    pdf_path: str | None
     source: str
     notes: str
 
@@ -22,8 +22,8 @@ class Provider(Protocol):
     def fetch(
         self,
         name: str,
-        zip_code: Optional[str] = None,
-        country: Optional[str] = None,
+        zip_code: str | None = None,
+        country: str | None = None,
     ) -> CompanyRecord:
         """Retrieve a company record for the given identifiers."""
 
