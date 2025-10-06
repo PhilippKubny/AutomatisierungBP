@@ -136,7 +136,7 @@ def main() -> int:
             mapping=mapping,
         )
 
-    excel_io.save_workbook(args.excel)
+    excel_io.save(args.excel)
     return 0
 
 
