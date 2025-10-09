@@ -355,6 +355,34 @@ def write_result(
         worksheet[f"{column_letter}{row_index}"] = cell_value
 
 
+def write_hit_date(
+    excel_path: str,
+    sheet: str,
+    row_index: int,
+    *,
+    column: str | None,
+) -> None:
+    """Schreibt das aktuelle Datum als Treffer-Datum in die angegebene Spalte."""
+
+    column_letter = _normalise_column(column)
+    if not column_letter:
+        LOGGER.debug("Keine Spalte für Treffer-Datum konfiguriert")
+        return
+
+    workbook = _get_or_load_workbook(excel_path)
+    worksheet = _get_worksheet(workbook, sheet)
+
+    LOGGER.debug(
+        "Schreibe Treffer-Datum für Zeile %s in Spalte %s (Blatt '%s', %s)",
+        row_index,
+        column_letter,
+        sheet,
+        excel_path,
+    )
+
+    worksheet[f"{column_letter}{row_index}"] = date.today().strftime("%d.%m.%Y")
+
+
 def write_to_excel_error(
     path: str,
     sheet: str | None,
@@ -553,6 +581,7 @@ __all__ = [
     "RowData",
     "iter_rows",
     "write_result",
+    "write_hit_date",
     "write_to_excel_error",
     "write_update_to_excel",
     "col_letter_to_idx",
