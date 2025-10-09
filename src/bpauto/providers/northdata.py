@@ -119,7 +119,6 @@ class NorthDataProvider(Provider):
             stop=stop_after_attempt(5),
             wait=wait_exponential(multiplier=0.5, min=0.5, max=10),
             retry=retry_if_exception_type(_RetryableRequestError),
-            reraise=True,
             after=_log_retry,
         )
 
