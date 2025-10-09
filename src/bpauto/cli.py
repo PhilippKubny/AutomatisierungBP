@@ -19,16 +19,14 @@ _BASE_LOGGER = setup_logger()
 LOGGER = _BASE_LOGGER.getChild("cli")
 
 DEFAULT_MAPPING: dict[str, str] = {
-    "legal_name": "W",
-    "register_type": "U",
-    "register_no": "V",
+    "legal_name": "T",
+    "register_type": "V",
+    "register_no": "U",
     "street": "X",
-    "zip": "Y",
+    "zip": "AA",
     "city": "Z",
-    "country": "AC",
-    "pdf_path": "AA",
-    "notes": "AB",
-    "source": "AD",
+    "country": "AB",
+    "pdf_path": "P"
 }
 
 
