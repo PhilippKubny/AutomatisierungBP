@@ -29,6 +29,7 @@ class RowData(TypedDict, total=False):
     index: int
     name: str | None
     zip: str | None
+    city: str | None
     country: str | None
 
 
@@ -122,6 +123,7 @@ def iter_rows(
     end: int | None,
     name_col: str,
     zip_col: str | None = None,
+    city_col: str | None = None,
     country_col: str | None = None,
 ) -> Iterator[RowData]:
     """Liest Zeilen aus der Arbeitsmappe und liefert bereinigte Werte."""
@@ -153,6 +155,7 @@ def iter_rows(
                 index=row_idx,
                 name=name_value,
                 zip=_read_cell(worksheet, zip_col, row_idx),
+                city=_read_cell(worksheet, city_col, row_idx),
                 country=_read_cell(worksheet, country_col, row_idx),
             )
             yielded += 1

@@ -23,6 +23,8 @@ class Provider(Protocol):
         self,
         name: str,
         zip_code: str | None = None,
+        *,
+        city: str | None = None,
         country: str | None = None,
     ) -> CompanyRecord:
         """Retrieve a company record for the given identifiers."""

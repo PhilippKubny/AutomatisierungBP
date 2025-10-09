@@ -76,6 +76,7 @@ class _Candidate:
     payload: dict[str, Any]
     is_exact_match: bool
     zip_matches: bool
+    city_matches: bool
     score: float
 
 
@@ -179,6 +180,8 @@ class NorthDataProvider(Provider):
         self,
         name: str,
         zip_code: str | None = None,
+        *,
+        city: str | None = None,
         country: str | None = None,
     ) -> dict[str, Any]:
         params: dict[str, str] = {"query": name}
@@ -186,6 +189,8 @@ class NorthDataProvider(Provider):
             params["country"] = country
         if zip_code:
             params["postalCode"] = zip_code
+        if city:
+            params["city"] = city
 
         LOGGER.debug("Frage NorthData API mit Parametern: %s", params)
 
@@ -224,6 +229,7 @@ class NorthDataProvider(Provider):
         *,
         query_name: str,
         query_zip: str | None,
+        query_city: str | None,
         index: int,
     ) -> _Candidate:
         def _float_score(keys: Sequence[str]) -> float:
@@ -249,12 +255,24 @@ class NorthDataProvider(Provider):
             query_zip and entry_zip and str(entry_zip).strip() == str(query_zip).strip()
         )
 
+        entry_city = (
+            entry.get("city")
+            or (
+                entry.get("address", {}) if isinstance(entry.get("address"), dict) else {}
+            ).get("city")
+        )
+        city_matches = bool(
+            query_city and entry_city and str(entry_city).strip().casefold()
+            == str(query_city).strip().casefold()
+        )
+
         score = _float_score(["score", "confidence", "matchScore"])
         return _Candidate(
             index=index,
             payload=entry,
             is_exact_match=is_exact_match,
             zip_matches=zip_matches,
+            city_matches=city_matches,
             score=score,
         )
 
@@ -263,6 +281,7 @@ class NorthDataProvider(Provider):
         raw: dict[str, Any],
         name: str,
         zip_code: str | None = None,
+        city: str | None = None,
     ) -> dict[str, Any] | None:
         candidates: list[_Candidate] = []
         for idx, entry in enumerate(self._extract_results(raw)):
@@ -271,12 +290,18 @@ class NorthDataProvider(Provider):
                     entry,
                     query_name=name,
                     query_zip=zip_code,
+                    query_city=city,
                     index=idx,
                 )
             )
 
         if not candidates:
             return None
+
+        if city:
+            city_matches = [c for c in candidates if c.city_matches]
+            if city_matches:
+                candidates = city_matches
 
         if zip_code:
             zip_matches = [c for c in candidates if c.zip_matches]
@@ -354,16 +379,24 @@ class NorthDataProvider(Provider):
         self,
         name: str,
         zip_code: str | None = None,
+        *,
+        city: str | None = None,
         country: str | None = None,
     ) -> CompanyRecord:
         LOGGER.info(
-            "Rufe NorthData-Daten ab für name=%s zip=%s country=%s",
+            "Rufe NorthData-Daten ab für name=%s zip=%s city=%s country=%s",
             name,
             zip_code,
+            city,
             country,
         )
         try:
-            raw = self._query_api(name=name, zip_code=zip_code, country=country)
+            raw = self._query_api(
+                name=name,
+                zip_code=zip_code,
+                city=city,
+                country=country,
+            )
         except RuntimeError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
@@ -382,7 +415,7 @@ class NorthDataProvider(Provider):
                 source="northdata_api",
             )
 
-        payload = self._best_match(raw, name=name, zip_code=zip_code)
+        payload = self._best_match(raw, name=name, zip_code=zip_code, city=city)
         if not payload:
             LOGGER.warning("NorthData: keine verwertbaren Treffer für %s", name)
             return CompanyRecord(

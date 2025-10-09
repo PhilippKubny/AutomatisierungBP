@@ -24,7 +24,12 @@ def main() -> int:
         return 2
 
     try:
-        record = provider.fetch(name="Siemens AG", zip_code="80333", country="DE")
+        record = provider.fetch(
+            name="Siemens AG",
+            zip_code="80333",
+            city="München",
+            country="DE",
+        )
     except RuntimeError as exc:
         print(f"Authentifizierungsfehler: {exc}", file=sys.stderr)
         return 2
