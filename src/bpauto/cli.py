@@ -23,6 +23,7 @@ DEFAULT_MAPPING: dict[str, str] = {
     "register_type": "V",
     "register_no": "U",
     "street": "X",
+    "house_number": "Y",
     "zip": "AA",
     "city": "Z",
     "country": "AB",

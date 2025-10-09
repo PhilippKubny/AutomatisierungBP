@@ -363,20 +363,85 @@ class NorthDataProvider(Provider):
 
         return str(file_path)
 
+    @staticmethod
+    def _split_street_and_number(value: object | None) -> tuple[str | None, str | None]:
+        if value is None:
+            return None, None
+        value_str = str(value).strip()
+        if not value_str:
+            return None, None
+
+        match = re.search(r"\d", value_str)
+        if not match:
+            return value_str, None
+
+        street = value_str[: match.start()].strip()
+        house = value_str[match.start():].strip()
+        if re.fullmatch(r"\d+\s+[A-Za-z]", house):
+            house = house.replace(" ", "")
+        return street or None, house or None
+
     def _normalise_address(self, payload: dict[str, Any]) -> dict[str, Any]:
         address_raw = payload.get("address")
+        street: str | None = None
+        house_number: str | None = None
+        zip_code: str | None = None
+        city: str | None = None
+        country: str | None = None
+
         if isinstance(address_raw, dict):
-            return {
-                "street": address_raw.get("street") or address_raw.get("streetName"),
-                "zip": address_raw.get("zip") or address_raw.get("postalCode"),
-                "city": address_raw.get("city"),
-                "country": address_raw.get("country"),
-            }
+            street = (address_raw.get("street") or address_raw.get("streetName"))
+            house_number = (
+                address_raw.get("houseNumber")
+                or address_raw.get("house_number")
+                or address_raw.get("houseNo")
+                or address_raw.get("house")
+            )
+            zip_code = address_raw.get("zip") or address_raw.get("postalCode")
+            city = address_raw.get("city")
+            country = address_raw.get("country")
+        else:
+            street = payload.get("street") or payload.get("streetName")
+            house_number = (
+                payload.get("houseNumber")
+                or payload.get("house_number")
+                or payload.get("houseNo")
+                or payload.get("house")
+            )
+            zip_code = payload.get("zip") or payload.get("postalCode")
+            city = payload.get("city")
+            country = payload.get("country")
+
+        street_clean: str | None
+        house_clean: str | None
+        street_clean, house_clean = self._split_street_and_number(street)
+
+        if not house_number:
+            house_number = house_clean
+        elif isinstance(house_number, str):
+            house_number = house_number.strip() or None
+        else:
+            house_number = str(house_number).strip() or None
+
+        if street_clean is None:
+            if isinstance(street, str):
+                street_clean = street.strip() or None
+            elif street is not None:
+                street_clean = str(street).strip() or None
+
+        def _clean(value: object | None) -> str | None:
+            if value is None:
+                return None
+            if isinstance(value, str):
+                return value.strip() or None
+            return str(value).strip() or None
+
         return {
-            "street": payload.get("street"),
-            "zip": payload.get("zip") or payload.get("postalCode"),
-            "city": payload.get("city"),
-            "country": payload.get("country"),
+            "street": street_clean,
+            "house_number": house_number,
+            "zip": _clean(zip_code),
+            "city": _clean(city),
+            "country": _clean(country),
         }
 
     def fetch(
@@ -477,7 +542,7 @@ class NorthDataProvider(Provider):
                 record["register_no"] = reg_no_str
 
         address = self._normalise_address(payload)
-        for field in ("street", "zip", "city", "country"):
+        for field in ("street", "house_number", "zip", "city", "country"):
             value = address.get(field)
             if value:
                 record[field] = str(value)

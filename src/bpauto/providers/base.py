@@ -8,6 +8,7 @@ class CompanyRecord(TypedDict, total=False):
     register_type: str
     register_no: str
     street: str
+    house_number: str
     zip: str
     city: str
     country: str
