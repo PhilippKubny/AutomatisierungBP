@@ -26,6 +26,7 @@ class Provider(Protocol):
         *,
         city: str | None = None,
         country: str | None = None,
+        address: str | None = None,
     ) -> CompanyRecord:
         """Retrieve a company record for the given identifiers."""
 

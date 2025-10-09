@@ -31,6 +31,8 @@ class RowData(TypedDict, total=False):
     zip: str | None
     city: str | None
     country: str | None
+    street: str | None
+    house_number: str | None
 
 
 _WORKBOOK_CACHE: dict[str, Workbook] = {}
@@ -125,6 +127,8 @@ def iter_rows(
     zip_col: str | None = None,
     city_col: str | None = None,
     country_col: str | None = None,
+    street_col: str | None = None,
+    house_number_col: str | None = None,
 ) -> Iterator[RowData]:
     """Liest Zeilen aus der Arbeitsmappe und liefert bereinigte Werte."""
 
@@ -157,6 +161,8 @@ def iter_rows(
                 zip=_read_cell(worksheet, zip_col, row_idx),
                 city=_read_cell(worksheet, city_col, row_idx),
                 country=_read_cell(worksheet, country_col, row_idx),
+                street=_read_cell(worksheet, street_col, row_idx),
+                house_number=_read_cell(worksheet, house_number_col, row_idx),
             )
             yielded += 1
             yield row_data

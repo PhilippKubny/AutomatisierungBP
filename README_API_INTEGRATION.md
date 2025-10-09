@@ -50,6 +50,9 @@ python cli.py \
   --sheet "Tabelle1" \
   --start 3 \
   --name-col C \
+  --street-col F \
+  --house-number-col G \
+  --city-col H \
   --zip-col I \
   --country-col J \
   --mapping-yaml mappings/example_mapping.yaml \
@@ -58,6 +61,9 @@ python cli.py \
 
 * `--end` kann optional angegeben werden; ohne Angabe wird bis zur letzten Zeile mit Firmennamen gelesen.
 * `--dry-run` führt den Abruf aus, schreibt aber nichts in Excel (praktisch für Tests).
+* `--street-col` und `--house-number-col` werden eingelesen und protokolliert. Für den NorthData-Aufruf wird jedoch ausschließlich
+  der Ort (`--city-col`) als `address`-Parameter kombiniert mit dem Firmennamen (`name`) verwendet. Platzhalter wie `#` oder `-`
+  werden automatisch ignoriert.
 
 Der CLI-Lauf fasst am Ende die Anzahl verarbeiteter Zeilen, Treffer sowie `no result`-Fälle zusammen. Exitcodes:
 

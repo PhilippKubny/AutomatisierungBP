@@ -183,19 +183,22 @@ class NorthDataProvider(Provider):
         *,
         city: str | None = None,
         country: str | None = None,
+        address: str | None = None,
     ) -> dict[str, Any]:
         params: dict[str, str] = {"name": name}
-        address_parts: list[str] = []
-        if zip_code:
-            address_parts.append(str(zip_code))
-        if city:
-            address_parts.append(city)
-        if country:
-            address_parts.append(country)
-        if address_parts:
-            params["address"] = " ".join(address_parts)
 
-        LOGGER.debug("Frage NorthData API mit Parametern: %s", params)
+        query_address = (address or city or "").strip()
+        if query_address:
+            params["address"] = query_address
+        else:
+            LOGGER.debug(
+                "NorthData Anfrage ohne address-Parameter für %s, da kein Ort vorliegt",
+                name,
+            )
+
+        LOGGER.debug(
+            "Frage NorthData API mit Parametern: name=%s address=%s", name, params.get("address")
+        )
 
         try:
             return self._perform_request(params)
@@ -383,13 +386,15 @@ class NorthDataProvider(Provider):
         *,
         city: str | None = None,
         country: str | None = None,
+        address: str | None = None,
     ) -> CompanyRecord:
         LOGGER.info(
-            "Rufe NorthData-Daten ab für name=%s zip=%s city=%s country=%s",
+            "Rufe NorthData-Daten ab für name=%s zip=%s city=%s country=%s address=%s",
             name,
             zip_code,
             city,
             country,
+            address,
         )
         try:
             raw = self._query_api(
@@ -397,6 +402,7 @@ class NorthDataProvider(Provider):
                 zip_code=zip_code,
                 city=city,
                 country=country,
+                address=address,
             )
         except RuntimeError:
             raise
