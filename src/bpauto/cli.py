@@ -42,6 +42,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--zip-col", default=None, help="Spalte mit Postleitzahl (optional)")
     parser.add_argument("--city-col", default=None, help="Spalte mit Ort (optional)")
     parser.add_argument("--country-col", default=None, help="Spalte mit Ländercode (optional)")
+    parser.add_argument("--street-col", default=None, help="Spalte mit Straße (optional)")
+    parser.add_argument(
+        "--house-number-col", default=None, help="Spalte mit Hausnummer (optional)"
+    )
     parser.add_argument(
         "--mapping-yaml",
         help="YAML mit Mapping zwischen CompanyRecord-Feldern und Spalten",
@@ -77,6 +81,17 @@ def _validate_column(column: str | None) -> str | None:
     if not column.isalpha():
         raise ValueError(f"Ungültiger Spaltenwert: {column}")
     return column
+
+
+def _normalise_address_component(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if cleaned in {"#", "-"}:
+        return None
+    return cleaned
 
 
 def _load_mapping(path: str | None) -> dict[str, str]:
@@ -155,6 +170,18 @@ def main() -> int:
         LOGGER.error("%s", exc)
         return 2
 
+    try:
+        street_column = _validate_column(args.street_col)
+    except ValueError as exc:
+        LOGGER.error("%s", exc)
+        return 2
+
+    try:
+        house_number_column = _validate_column(args.house_number_col)
+    except ValueError as exc:
+        LOGGER.error("%s", exc)
+        return 2
+
     rows = excel_io.iter_rows(
         excel_path=args.excel,
         sheet=args.sheet,
@@ -164,6 +191,8 @@ def main() -> int:
         zip_col=zip_column,
         city_col=city_column,
         country_col=country_column,
+        street_col=street_column,
+        house_number_col=house_number_column,
     )
 
     for row in rows:
@@ -172,17 +201,37 @@ def main() -> int:
         zip_code = row.get("zip")
         city = row.get("city")
         country = row.get("country")
-
+        street = row.get("street")
+        house_number = row.get("house_number")
         if not name:
             LOGGER.debug("Überspringe Zeile %s ohne Firmennamen", row.get("index"))
             continue
 
+        zip_clean = _normalise_address_component(zip_code)
+        city_clean = _normalise_address_component(city)
+        country_clean = _normalise_address_component(country)
+
+        LOGGER.debug(
+            "Zeile %s: Verwende address-Parameter für NorthData: %s",
+            row.get("index"),
+            city_clean or "-",
+        )
+
+        if street or house_number:
+            LOGGER.debug(
+                "Zeile %s: Straße/Hausnr. eingelesen (%s, %s) – werden nicht für den address-Parameter genutzt",
+                row.get("index"),
+                street or "-",
+                house_number or "-",
+            )
+
         try:
             record = provider.fetch(
                 name=name,
-                zip_code=zip_code,
-                city=city,
-                country=country,
+                zip_code=zip_clean,
+                city=city_clean,
+                country=country_clean,
+                address=city_clean,
             )
         except RuntimeError as exc:
             LOGGER.error("Abbruch wegen API-Fehler: %s", exc)

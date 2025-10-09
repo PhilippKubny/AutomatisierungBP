@@ -67,6 +67,7 @@ def test_fetch_transforms_payload(
         zip_code="80333",
         city="München",
         country="DE",
+        address="München",
     )
 
     assert record["legal_name"] == "Example GmbH"
@@ -78,7 +79,7 @@ def test_fetch_transforms_payload(
     assert "zip_matched=80333" in record["notes"]
 
     assert captured_params[0]["name"] == "Example GmbH"
-    assert captured_params[0]["address"] == "80333 München DE"
+    assert captured_params[0]["address"] == "München"
 
 
 def test_fetch_handles_ssl_error(monkeypatch: pytest.MonkeyPatch) -> None:
