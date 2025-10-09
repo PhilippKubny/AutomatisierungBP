@@ -23,19 +23,16 @@ class _DummyResponse:
 @pytest.fixture
 def fake_response() -> _DummyResponse:
     payload = {
-        "result": [
-            {
-                "legalName": "Example GmbH",
-                "register": {"type": "HRB", "number": "12345"},
-                "address": {
-                    "street": "Musterstraße 1",
-                    "postalCode": "80333",
-                    "city": "München",
-                    "country": "DE",
-                },
-                "score": 0.91,
-            }
-        ]
+        "id": "12345678",
+        "name": {"name": "Example GmbH", "legalForm": "GmbH"},
+        "register": {"id": "HRB 12345", "city": "München"},
+        "address": {
+            "street": "Musterstraße 1",
+            "postalCode": "80333",
+            "city": "München",
+            "country": "DE",
+        },
+        "status": "active",
     }
     return _DummyResponse(payload)
 
@@ -78,12 +75,10 @@ def test_fetch_transforms_payload(
     assert record["zip"] == "80333"
     assert record["city"] == "München"
     assert record["country"] == "DE"
-    assert "confidence=0.91" in record["notes"]
+    assert "zip_matched=80333" in record["notes"]
 
-    assert captured_params[0]["query"] == "Example GmbH"
-    assert captured_params[0]["postalCode"] == "80333"
-    assert captured_params[0]["country"] == "DE"
-    assert captured_params[0]["city"] == "München"
+    assert captured_params[0]["name"] == "Example GmbH"
+    assert captured_params[0]["address"] == "80333 München DE"
 
 
 def test_fetch_handles_ssl_error(monkeypatch: pytest.MonkeyPatch) -> None:

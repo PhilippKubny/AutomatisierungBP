@@ -83,7 +83,7 @@ class _Candidate:
 class NorthDataProvider(Provider):
     """Provider that retrieves company information from the NorthData API."""
 
-    base_url = "https://api.northdata.de/search"
+    base_url = "https://www.northdata.de/_api/company/v1/company"
 
     def __init__(
         self,
@@ -184,13 +184,16 @@ class NorthDataProvider(Provider):
         city: str | None = None,
         country: str | None = None,
     ) -> dict[str, Any]:
-        params: dict[str, str] = {"query": name}
-        if country:
-            params["country"] = country
+        params: dict[str, str] = {"name": name}
+        address_parts: list[str] = []
         if zip_code:
-            params["postalCode"] = zip_code
+            address_parts.append(str(zip_code))
         if city:
-            params["city"] = city
+            address_parts.append(city)
+        if country:
+            address_parts.append(country)
+        if address_parts:
+            params["address"] = " ".join(address_parts)
 
         LOGGER.debug("Frage NorthData API mit Parametern: %s", params)
 
@@ -239,28 +242,26 @@ class NorthDataProvider(Provider):
                     return float(raw_score)
             return 0.0
 
-        entry_name = entry.get("legalName") or entry.get("name")
+        raw_name = entry.get("legalName") or entry.get("legal_name") or entry.get("name")
+        if isinstance(raw_name, dict):
+            entry_name = raw_name.get("name") or raw_name.get("legalName")
+        else:
+            entry_name = raw_name
         normalised_entry_name = self._normalise_name(entry_name)
         query_name_norm = self._normalise_name(query_name)
         is_exact_match = bool(query_name_norm and normalised_entry_name == query_name_norm)
 
-        entry_zip = (
-            entry.get("postalCode")
-            or entry.get("zip")
-            or (entry.get("address", {}) if isinstance(entry.get("address"), dict) else {}).get(
-                "postalCode"
-            )
-        )
+        address_block = entry.get("address") if isinstance(entry.get("address"), dict) else {}
+        entry_zip = entry.get("postalCode") or entry.get("zip")
+        if not entry_zip and isinstance(address_block, dict):
+            entry_zip = address_block.get("postalCode") or address_block.get("zip")
         zip_matches = bool(
             query_zip and entry_zip and str(entry_zip).strip() == str(query_zip).strip()
         )
 
-        entry_city = (
-            entry.get("city")
-            or (
-                entry.get("address", {}) if isinstance(entry.get("address"), dict) else {}
-            ).get("city")
-        )
+        entry_city = entry.get("city")
+        if not entry_city and isinstance(address_block, dict):
+            entry_city = address_block.get("city")
         city_matches = bool(
             query_city and entry_city and str(entry_city).strip().casefold()
             == str(query_city).strip().casefold()
@@ -426,22 +427,48 @@ class NorthDataProvider(Provider):
 
         record: CompanyRecord = CompanyRecord(source="northdata_api")
 
-        legal_name = (
-            payload.get("legalName") or payload.get("legal_name") or payload.get("name") or name
+        raw_name = (
+            payload.get("legalName")
+            or payload.get("legal_name")
+            or payload.get("name")
+            or name
         )
+        if isinstance(raw_name, dict):
+            legal_name = raw_name.get("name") or raw_name.get("legalName") or name
+        else:
+            legal_name = raw_name
         record["legal_name"] = str(legal_name)
 
         register_info = payload.get("register")
         if isinstance(register_info, dict):
-            reg_type = register_info.get("type") or register_info.get("registerType")
-            reg_no = register_info.get("number") or register_info.get("registerNumber")
+            reg_type = (
+                register_info.get("type")
+                or register_info.get("registerType")
+                or register_info.get("category")
+            )
+            reg_no = (
+                register_info.get("number")
+                or register_info.get("registerNumber")
+                or register_info.get("id")
+            )
+            if not reg_type and isinstance(reg_no, str):
+                reg_type = reg_no.split()[0] if reg_no.strip() else None
         else:
             reg_type = payload.get("registerType")
             reg_no = payload.get("registerNumber")
         if reg_type:
             record["register_type"] = str(reg_type)
         if reg_no:
-            record["register_no"] = str(reg_no)
+            reg_no_str = str(reg_no)
+            if (
+                reg_type
+                and isinstance(reg_no, str)
+                and reg_no_str.strip().upper().startswith(str(reg_type).strip().upper())
+            ):
+                reg_no_clean = reg_no_str.strip()[len(str(reg_type).strip()):].strip()
+                record["register_no"] = reg_no_clean or reg_no_str.strip()
+            else:
+                record["register_no"] = reg_no_str
 
         address = self._normalise_address(payload)
         for field in ("street", "zip", "city", "country"):
