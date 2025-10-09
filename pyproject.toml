@@ -32,7 +32,10 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["bpauto"]
+packages = ["src/bpauto"]
+
+[tool.hatch.build.targets.sdist]
+packages = ["src/bpauto"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
