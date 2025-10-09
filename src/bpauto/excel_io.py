@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from datetime import date
 from typing import TypedDict, cast
+
+import re
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -37,6 +39,69 @@ class RowData(TypedDict, total=False):
 
 _WORKBOOK_CACHE: dict[str, Workbook] = {}
 
+_NAME_NOISE_VALUES = {
+    "",
+    "-",
+    "--",
+    "N.N",
+    "N.N.",
+    "NN",
+    "N/A",
+    "K.A",
+    "K.A.",
+    "KA",
+    "O.A",
+    "O.A.",
+    "OA",
+    "OHNE ANGABE",
+    "KEINE ANGABE",
+}
+
+_SUFFIX_SANITISER = re.compile(r"[^0-9A-Z]+")
+
+_VALID_SUFFIX_TOKENS = {
+    "AG",
+    "AS",
+    "AB",
+    "BV",
+    "BVBA",
+    "EG",
+    "EK",
+    "EV",
+    "GBR",
+    "GDBR",
+    "GMBH",
+    "INC",
+    "KG",
+    "KGA",
+    "KGAA",
+    "LIMITED",
+    "LLC",
+    "LLP",
+    "LP",
+    "LTD",
+    "NV",
+    "OHG",
+    "PARTG",
+    "PARTGMBB",
+    "PLC",
+    "SAS",
+    "SARL",
+    "SA",
+    "SCE",
+    "SE",
+    "SPA",
+    "SRL",
+    "STIFTUNG",
+    "UG",
+    "UGHAFTUNGSBESCHRANKT",
+}
+
+_VALID_SUFFIX_PHRASES = {
+    "CO KG",
+    "CO KGAA",
+}
+
 
 def _get_or_load_workbook(excel_path: str) -> Workbook:
     """Gibt eine zwischengespeicherte Arbeitsmappe zurück."""
@@ -64,6 +129,70 @@ def _cell_to_string(value: object) -> str | None:
     else:
         value_str = str(value).strip()
     return value_str or None
+
+
+def _is_noise_name_part(value: str) -> bool:
+    collapsed = "".join(ch for ch in value.upper() if ch.isalnum())
+    normalised = value.strip().upper()
+    return collapsed in _NAME_NOISE_VALUES or normalised in _NAME_NOISE_VALUES
+
+
+def _normalise_name_part(value: str | None) -> str | None:
+    if value is None:
+        return None
+    collapsed = " ".join(value.split())
+    if not collapsed:
+        return None
+    if _is_noise_name_part(collapsed):
+        return None
+    return collapsed
+
+
+def _normalise_suffix_token(token: str) -> str:
+    return _SUFFIX_SANITISER.sub("", token.upper())
+
+
+def _has_valid_suffix(name: str | None) -> bool:
+    if not name:
+        return False
+    tokens = [_normalise_suffix_token(part) for part in name.split()]
+    tokens = [token for token in tokens if token]
+    if not tokens:
+        return False
+    last_token = tokens[-1]
+    if last_token in _VALID_SUFFIX_TOKENS:
+        return True
+    if len(tokens) >= 2:
+        last_two = " ".join(tokens[-2:])
+        if last_two in _VALID_SUFFIX_PHRASES:
+            return True
+        compact_two = "".join(tokens[-2:])
+        if compact_two in _VALID_SUFFIX_TOKENS or compact_two in _VALID_SUFFIX_PHRASES:
+            return True
+    if len(tokens) >= 3:
+        last_three = " ".join(tokens[-3:])
+        if last_three in _VALID_SUFFIX_PHRASES:
+            return True
+        compact_three = "".join(tokens[-3:])
+        if compact_three in _VALID_SUFFIX_TOKENS or compact_three in _VALID_SUFFIX_PHRASES:
+            return True
+    return False
+
+
+def _combine_name_parts(parts: Iterable[str | None]) -> str | None:
+    cleaned_parts = [_normalise_name_part(part) for part in parts]
+    fragments = [part for part in cleaned_parts if part]
+    if not fragments:
+        return None
+    if len(fragments) == 1:
+        return fragments[0]
+    combined = " ".join(fragments)
+    if _has_valid_suffix(combined):
+        return combined
+    suffix_fragments = [fragment for fragment in fragments if _has_valid_suffix(fragment)]
+    if suffix_fragments:
+        return max(suffix_fragments, key=len)
+    return max(fragments, key=len)
 
 
 def _read_cell(worksheet: Worksheet, column: str | None, row_index: int) -> str | None:
@@ -124,6 +253,7 @@ def iter_rows(
     start: int,
     end: int | None,
     name_col: str,
+    name_additional_cols: tuple[str | None, ...] | None = None,
     zip_col: str | None = None,
     city_col: str | None = None,
     country_col: str | None = None,
@@ -142,6 +272,14 @@ def iter_rows(
         end if end is not None else _find_last_row_with_name(worksheet, normalised_name_col, start)
     )
 
+    additional_name_cols = tuple(
+        col
+        for col in (
+            _normalise_column(column) for column in (name_additional_cols or ())
+        )
+        if col
+    )
+
     LOGGER.info("Lese Zeilen %s-%s aus Blatt '%s' (%s)", start, stop, sheet, excel_path)
 
     def _generator() -> Iterator[RowData]:
@@ -155,9 +293,14 @@ def iter_rows(
             if name_value is None:
                 continue
 
+            extra_parts = [
+                _read_cell(worksheet, column, row_idx) for column in additional_name_cols
+            ]
+            combined_name = _combine_name_parts([name_value, *extra_parts])
+
             row_data: RowData = RowData(
                 index=row_idx,
-                name=name_value,
+                name=combined_name or name_value,
                 zip=_read_cell(worksheet, zip_col, row_idx),
                 city=_read_cell(worksheet, city_col, row_idx),
                 country=_read_cell(worksheet, country_col, row_idx),
