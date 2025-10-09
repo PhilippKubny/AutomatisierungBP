@@ -37,6 +37,31 @@ def _create_workbook(path: Path) -> None:
     workbook.save(path)
 
 
+def test_iter_rows_combines_multiple_name_columns(tmp_path: Path) -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Daten"
+    sheet["C2"] = "Another GmbH & Co."
+    sheet["D2"] = "KG"
+    sheet["C3"] = "Solo AG"
+    sheet["D3"] = "n.n."
+    path = tmp_path / "names.xlsx"
+    workbook.save(path)
+
+    rows = list(
+        excel_io.iter_rows(
+            excel_path=str(path),
+            sheet="Daten",
+            start=2,
+            end=3,
+            name_col="C",
+            name_additional_cols=("D",),
+        )
+    )
+
+    assert [row["name"] for row in rows] == ["Another GmbH & Co. KG", "Solo AG"]
+
+
 def test_iter_rows_trims_and_skips_blank(tmp_path: Path) -> None:
     excel_path = tmp_path / "test.xlsx"
     _create_workbook(excel_path)
