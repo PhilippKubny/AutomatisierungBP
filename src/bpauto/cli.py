@@ -241,12 +241,13 @@ def main() -> int:
             continue
 
         notes = (record.get("notes") or "").lower()
-        if "no result" in notes:
-            no_result += 1
-        else:
+        is_hit = "no result" not in notes
+        if is_hit:
             hits += 1
+        else:
+            no_result += 1
 
-        if not args.dry_run:
+        if is_hit and not args.dry_run:
             excel_io.write_result(
                 excel_path=args.excel,
                 sheet=args.sheet,
