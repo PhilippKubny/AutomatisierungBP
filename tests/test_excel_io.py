@@ -25,14 +25,14 @@ def _create_workbook(path: Path) -> None:
     sheet["C3"] = "Example GmbH"
     sheet["F3"] = "Musterstraße"
     sheet["G3"] = "1"
-    sheet["Y3"] = " 80333 "
+    sheet["AA3"] = " 80333 "
     sheet["Z3"] = "München"
     sheet["AC3"] = "DE"
     sheet["C4"] = None
     sheet["C5"] = "Another AG"
     sheet["F5"] = "Beispielallee"
     sheet["G5"] = "2a"
-    sheet["Y5"] = "10115"
+    sheet["AA5"] = "10115"
     sheet["Z5"] = "Berlin"
     workbook.save(path)
 
@@ -48,7 +48,7 @@ def test_iter_rows_trims_and_skips_blank(tmp_path: Path) -> None:
             start=2,
             end=None,
             name_col="c",
-            zip_col="y",
+            zip_col="aa",
             city_col="z",
             country_col="ac",
             street_col="f",
@@ -75,7 +75,8 @@ def test_write_and_save(tmp_path: Path) -> None:
         legal_name="Example GmbH",
         register_type="HRB",
         register_no="12345",
-        street="Musterstraße 1",
+        street="Musterstraße",
+        house_number="1",
         zip="80333",
         city="München",
         country="DE",
@@ -88,7 +89,8 @@ def test_write_and_save(tmp_path: Path) -> None:
         "register_type": "U",
         "register_no": "V",
         "street": "X",
-        "zip": "Y",
+        "house_number": "Y",
+        "zip": "AA",
         "city": "Z",
         "country": "AC",
         "notes": "AB",
@@ -108,6 +110,9 @@ def test_write_and_save(tmp_path: Path) -> None:
     sheet = workbook["Daten"]
 
     assert sheet["W3"].value == "Example GmbH"
+    assert sheet["X3"].value == "Musterstraße"
+    assert sheet["Y3"].value == "1"
+    assert sheet["AA3"].value == "80333"
     assert sheet["AB3"].value == "confidence=0.90"
     assert sheet["AD3"].value == "northdata_api"
 
