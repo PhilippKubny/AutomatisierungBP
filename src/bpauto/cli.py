@@ -253,9 +253,7 @@ def main() -> int:
                 record=record,
                 mapping=mapping,
             )
-
-    if not args.dry_run:
-        excel_io.save(args.excel)
+            excel_io.save(args.excel)
 
     duration = time.perf_counter() - start_time
     LOGGER.info(
