@@ -2,6 +2,7 @@ from typing import Any
 
 import pytest
 
+from bpauto.providers import northdata as northdata_module
 from bpauto.providers.northdata import NorthDataProvider
 
 
@@ -77,3 +78,22 @@ def test_fetch_transforms_payload(
     assert captured_params[0]["query"] == "Example GmbH"
     assert captured_params[0]["postalCode"] == "80333"
     assert captured_params[0]["country"] == "DE"
+
+
+def test_fetch_handles_ssl_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NORTHDATA_API_KEY", "dummy-key")
+
+    monkeypatch.setattr("tenacity.nap.time.sleep", lambda _seconds: None)
+
+    def raise_ssl_error(*_: Any, **__: Any) -> None:
+        raise northdata_module.requests.exceptions.SSLError("SSL handshake failed")
+
+    monkeypatch.setattr("bpauto.providers.northdata.requests.get", raise_ssl_error)
+
+    provider = NorthDataProvider(download_ad=False)
+
+    record = provider.fetch(name="SSL Failure GmbH", zip_code="12345", country="DE")
+
+    assert record["legal_name"] == "SSL Failure GmbH"
+    assert record["notes"] == "no result"
+    assert record["source"] == "northdata_api"
