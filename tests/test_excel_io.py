@@ -24,10 +24,12 @@ def _create_workbook(path: Path) -> None:
     sheet["C2"] = "  "
     sheet["C3"] = "Example GmbH"
     sheet["Y3"] = " 80333 "
+    sheet["Z3"] = "München"
     sheet["AC3"] = "DE"
     sheet["C4"] = None
     sheet["C5"] = "Another AG"
     sheet["Y5"] = "10115"
+    sheet["Z5"] = "Berlin"
     workbook.save(path)
 
 
@@ -43,6 +45,7 @@ def test_iter_rows_trims_and_skips_blank(tmp_path: Path) -> None:
             end=None,
             name_col="c",
             zip_col="y",
+            city_col="z",
             country_col="ac",
         )
     )
@@ -51,6 +54,7 @@ def test_iter_rows_trims_and_skips_blank(tmp_path: Path) -> None:
     assert rows[0]["index"] == 3
     assert rows[0]["name"] == "Example GmbH"
     assert rows[0]["zip"] == "80333"
+    assert rows[0]["city"] == "München"
     assert rows[0]["country"] == "DE"
     assert rows[1]["name"] == "Another AG"
 

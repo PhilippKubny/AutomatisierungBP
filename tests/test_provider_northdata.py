@@ -65,7 +65,12 @@ def test_fetch_transforms_payload(
     monkeypatch.setattr("bpauto.providers.northdata.requests.get", fake_get)
 
     provider = NorthDataProvider(download_ad=False)
-    record = provider.fetch(name="Example GmbH", zip_code="80333", country="DE")
+    record = provider.fetch(
+        name="Example GmbH",
+        zip_code="80333",
+        city="München",
+        country="DE",
+    )
 
     assert record["legal_name"] == "Example GmbH"
     assert record["register_type"] == "HRB"
@@ -78,6 +83,7 @@ def test_fetch_transforms_payload(
     assert captured_params[0]["query"] == "Example GmbH"
     assert captured_params[0]["postalCode"] == "80333"
     assert captured_params[0]["country"] == "DE"
+    assert captured_params[0]["city"] == "München"
 
 
 def test_fetch_handles_ssl_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,7 +98,12 @@ def test_fetch_handles_ssl_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
     provider = NorthDataProvider(download_ad=False)
 
-    record = provider.fetch(name="SSL Failure GmbH", zip_code="12345", country="DE")
+    record = provider.fetch(
+        name="SSL Failure GmbH",
+        zip_code="12345",
+        city="Berlin",
+        country="DE",
+    )
 
     assert record["legal_name"] == "SSL Failure GmbH"
     assert record["notes"] == "no result"

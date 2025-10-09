@@ -40,6 +40,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--end", type=int, help="Endzeile (1-basiert, inklusiv)")
     parser.add_argument("--name-col", default="C", help="Spalte mit Firmenname (Standard: C)")
     parser.add_argument("--zip-col", default=None, help="Spalte mit Postleitzahl (optional)")
+    parser.add_argument("--city-col", default=None, help="Spalte mit Ort (optional)")
     parser.add_argument("--country-col", default=None, help="Spalte mit Ländercode (optional)")
     parser.add_argument(
         "--mapping-yaml",
@@ -143,6 +144,12 @@ def main() -> int:
         return 2
 
     try:
+        city_column = _validate_column(args.city_col)
+    except ValueError as exc:
+        LOGGER.error("%s", exc)
+        return 2
+
+    try:
         country_column = _validate_column(args.country_col)
     except ValueError as exc:
         LOGGER.error("%s", exc)
@@ -155,6 +162,7 @@ def main() -> int:
         end=args.end,
         name_col=name_column,
         zip_col=zip_column,
+        city_col=city_column,
         country_col=country_column,
     )
 
@@ -162,6 +170,7 @@ def main() -> int:
         processed += 1
         name = row.get("name")
         zip_code = row.get("zip")
+        city = row.get("city")
         country = row.get("country")
 
         if not name:
@@ -169,7 +178,12 @@ def main() -> int:
             continue
 
         try:
-            record = provider.fetch(name=name, zip_code=zip_code, country=country)
+            record = provider.fetch(
+                name=name,
+                zip_code=zip_code,
+                city=city,
+                country=country,
+            )
         except RuntimeError as exc:
             LOGGER.error("Abbruch wegen API-Fehler: %s", exc)
             return 3
