@@ -30,6 +30,8 @@ DEFAULT_MAPPING: dict[str, str] = {
     "pdf_path": "P"
 }
 
+API_HIT_DATE_COLUMN = "S"
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BP Automation NorthData Integration")
@@ -241,12 +243,20 @@ def main() -> int:
             continue
 
         notes = (record.get("notes") or "").lower()
-        if "no result" in notes:
-            no_result += 1
-        else:
+        is_hit = "no result" not in notes
+        if is_hit:
             hits += 1
+        else:
+            no_result += 1
 
         if not args.dry_run:
+            if is_hit:
+                excel_io.write_hit_date(
+                    excel_path=args.excel,
+                    sheet=args.sheet,
+                    row_index=row["index"],
+                    column=API_HIT_DATE_COLUMN,
+                )
             excel_io.write_result(
                 excel_path=args.excel,
                 sheet=args.sheet,

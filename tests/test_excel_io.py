@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Generator
 from pathlib import Path
 
+from datetime import date
+
 import pytest
 from openpyxl import Workbook, load_workbook
 
@@ -140,6 +142,30 @@ def test_write_and_save(tmp_path: Path) -> None:
     assert sheet["AA3"].value == "80333"
     assert sheet["AB3"].value == "confidence=0.90"
     assert sheet["AD3"].value == "northdata_api"
+
+
+def test_write_hit_date(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    excel_path = tmp_path / "hit_date.xlsx"
+    _create_workbook(excel_path)
+
+    class DummyDate(date):
+        @classmethod
+        def today(cls) -> "DummyDate":
+            return cls(2024, 1, 2)
+
+    monkeypatch.setattr(excel_io, "date", DummyDate)
+
+    excel_io.write_hit_date(
+        excel_path=str(excel_path),
+        sheet="Daten",
+        row_index=3,
+    )
+    excel_io.save(str(excel_path))
+
+    workbook = load_workbook(excel_path)
+    sheet = workbook["Daten"]
+
+    assert sheet["S3"].value == "02.01.2024"
 
 
 def test_missing_sheet_raises(tmp_path: Path) -> None:

@@ -355,6 +355,24 @@ def write_result(
         worksheet[f"{column_letter}{row_index}"] = cell_value
 
 
+def write_hit_date(
+    excel_path: str,
+    sheet: str,
+    row_index: int,
+    *,
+    column: str = "S",
+) -> None:
+    """Schreibt das aktuelle Datum in die angegebene Spalte."""
+
+    column_letter = _normalise_column(column)
+    if not column_letter:
+        raise ValueError("Spaltenbuchstabe darf nicht leer sein")
+
+    workbook = _get_or_load_workbook(excel_path)
+    worksheet = _get_worksheet(workbook, sheet)
+    worksheet[f"{column_letter}{row_index}"] = date.today().strftime("%d.%m.%Y")
+
+
 def write_to_excel_error(
     path: str,
     sheet: str | None,
