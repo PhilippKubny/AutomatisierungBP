@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from argparse import Namespace
 
 from bpauto import cli
@@ -68,3 +69,18 @@ def test_main_skips_rows_with_unsupported_country(monkeypatch):
     assert exit_code == 0
     assert len(fetch_calls) == 1
     assert fetch_calls[0]["country"] == "DE"
+
+
+def test_parse_args_sets_default_country_column(monkeypatch):
+    argv = [
+        "bpauto",
+        "--excel",
+        "dummy.xlsx",
+        "--sheet",
+        "Sheet1",
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    args = cli._parse_args()
+
+    assert args.country_col == "J"
