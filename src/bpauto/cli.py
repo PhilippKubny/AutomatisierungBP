@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+from collections import Counter
 from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 
@@ -161,9 +162,11 @@ def main() -> int:
     provider = NorthDataProvider(download_ad=args.download_ad)
 
     processed = 0
+    skipped = 0
     hits = 0
     no_result = 0
     errors = 0
+    skip_reasons: Counter[str] = Counter()
     start_time = time.perf_counter()
 
     try:
@@ -227,18 +230,31 @@ def main() -> int:
         street = row.get("street")
         house_number = row.get("house_number")
         if not name:
-            LOGGER.debug("Überspringe Zeile %s ohne Firmennamen", row.get("index"))
+            skipped += 1
+            skip_reasons["missing_name"] += 1
+            LOGGER.info("Zeile %s übersprungen: kein Firmenname", row.get("index"))
             continue
 
         zip_clean = _normalise_address_component(zip_code)
         city_clean = _normalise_address_component(city)
         country_clean = _normalise_address_component(country)
         country_code = country_clean.upper() if country_clean else None
-        if country_code is None or country_code not in SUPPORTED_COUNTRY_CODES:
-            LOGGER.debug(
-                "Überspringe Zeile %s mit nicht unterstütztem Land %s",
+        if country_code is None:
+            skipped += 1
+            skip_reasons["missing_country"] += 1
+            LOGGER.info(
+                "Zeile %s übersprungen: kein Ländercode angegeben",
                 row.get("index"),
-                country_clean or "-",
+            )
+            continue
+
+        if country_code not in SUPPORTED_COUNTRY_CODES:
+            skipped += 1
+            skip_reasons["unsupported_country"] += 1
+            LOGGER.info(
+                "Zeile %s übersprungen: Ländercode '%s' wird nicht unterstützt",
+                row.get("index"),
+                country_code,
             )
             continue
         country_clean = country_code
@@ -299,13 +315,18 @@ def main() -> int:
 
     duration = time.perf_counter() - start_time
     LOGGER.info(
-        "Verarbeitung abgeschlossen: processed=%s hits=%s no_result=%s errors=%s duration=%.2fs",
+        "Verarbeitung abgeschlossen: processed=%s hits=%s no_result=%s errors=%s skipped=%s duration=%.2fs",
         processed,
         hits,
         no_result,
         errors,
+        skipped,
         duration,
     )
+
+    if skip_reasons:
+        reason_summary = ", ".join(f"{reason}={count}" for reason, count in sorted(skip_reasons.items()))
+        LOGGER.info("Übersprungene Zeilen nach Grund: %s", reason_summary)
 
     if errors:
         return 4
