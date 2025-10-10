@@ -65,7 +65,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--name-col", default="C", help="Spalte mit Firmenname (Standard: C)")
     parser.add_argument("--zip-col", default=None, help="Spalte mit Postleitzahl (optional)")
     parser.add_argument("--city-col", default=None, help="Spalte mit Ort (optional)")
-    parser.add_argument("--country-col", default=None, help="Spalte mit Ländercode (optional)")
+    parser.add_argument(
+        "--country-col",
+        default="J",
+        help="Spalte mit Ländercode (Standard: J)",
+    )
     parser.add_argument("--street-col", default=None, help="Spalte mit Straße (optional)")
     parser.add_argument(
         "--house-number-col", default=None, help="Spalte mit Hausnummer (optional)"
