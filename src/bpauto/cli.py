@@ -32,6 +32,28 @@ DEFAULT_MAPPING: dict[str, str] = {
 
 API_HIT_DATE_COLUMN = "S"
 
+SUPPORTED_COUNTRY_CODES: set[str] = {
+    "AT",
+    "BE",
+    "CH",
+    "CY",
+    "CZ",
+    "DE",
+    "DK",
+    "ES",
+    "FI",
+    "FR",
+    "GB",
+    "IE",
+    "IL",
+    "LI",
+    "LU",
+    "NL",
+    "NO",
+    "PL",
+    "SE",
+}
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BP Automation NorthData Integration")
@@ -211,6 +233,15 @@ def main() -> int:
         zip_clean = _normalise_address_component(zip_code)
         city_clean = _normalise_address_component(city)
         country_clean = _normalise_address_component(country)
+        country_code = country_clean.upper() if country_clean else None
+        if country_code is None or country_code not in SUPPORTED_COUNTRY_CODES:
+            LOGGER.debug(
+                "Überspringe Zeile %s mit nicht unterstütztem Land %s",
+                row.get("index"),
+                country_clean or "-",
+            )
+            continue
+        country_clean = country_code
 
         LOGGER.debug(
             "Zeile %s: Verwende address-Parameter für NorthData: %s",
